@@ -431,6 +431,12 @@ int parse_operand(parser_t *p, ptx_opd_t *op) {
         op->comp = 0;
         return 0;
     }
+    if (strcmp(t.text, "%lanemask_le") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_LANEMASKLE;
+        op->comp = 0;
+        return 0;
+    }
     if (strcmp(t.text, "%tid.x") == 0 || strcmp(t.text, "%tid.y") == 0 ||
         strcmp(t.text, "%tid.z") == 0) {
         op->kind = OPD_SPECIAL;
