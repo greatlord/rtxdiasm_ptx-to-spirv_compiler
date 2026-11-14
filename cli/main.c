@@ -99,10 +99,17 @@ int main(int argc, char **argv) {
 
     int argi = 3;
     if (argi < argc && strncmp(argv[argi], "--", 2) != 0) {
-        entry = argv[argi++];
+        if (strcmp(argv[argi], "-") != 0)
+            entry = argv[argi];
+        argi++;
     }
     for (; argi < argc; argi++) {
         const char *a = argv[argi];
+        if (strncmp(a, "--entry=", 8) == 0) {
+            entry = a + 8;
+            if (entry[0] == '\0') entry = NULL;
+            continue;
+        }
         if (strncmp(a, "--cap.", 6) == 0) {
             const char *eq = strchr(a + 6, '=');
             if (!eq) {
