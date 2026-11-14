@@ -974,6 +974,33 @@ void emit_prelude(ctx_t *c) {
         if (c->failed)
             return;
     }
+    // Spinlock for 64-bit shared atomics expressed on the u32-viewed
+    // array (see emit_atom_shared64 in atom.c).  A Workgroup variable is
+    // one per workgroup, which is exactly the atomic's scope.
+    c->sh_lock_var = 0;
+    {
+        int needs_sh_lock = 0;
+        for (int fi = 0; fi < c->nfns && !needs_sh_lock; fi++)
+            for (size_t bi = 0;
+                 bi < c->fns[fi].nblocks && !needs_sh_lock; bi++)
+                for (size_t ii = 0; ii < c->fns[fi].blocks[bi].count; ii++) {
+                    const ptx_instr_t *ti =
+                        &c->fns[fi].blocks[bi].instrs[ii];
+                    if ((ti->op == POP_ATOM || ti->op == POP_ATOMCAS) &&
+                        ti->space == PSP_SHARED &&
+                        (ti->ty == PTY_U64 || ti->ty == PTY_F64)) {
+                        needs_sh_lock = 1;
+                        break;
+                    }
+                }
+        if (needs_sh_lock && c->nshvars > 0) {
+            c->sh_lock_var = nid(c);
+            put(c, &c->types, (4u << 16) | S_Variable);
+            put(c, &c->types, c->t_ptr_w_u32);
+            put(c, &c->types, c->sh_lock_var);
+            put(c, &c->types, 4); // StorageClass Workgroup
+        }
+    }
     // Dynamic `.shared` (`.extern`): one u32-word Workgroup array
     // shared by all extern declarations (they alias the same launch-
     // sized base in PTX), sized by spec constant 3 (words; default 1

@@ -314,6 +314,10 @@ typedef struct {
     uint32_t lock_var;             // hidden StorageBuffer { u32 lock } variable
 #define ACUDA_MAX_SHVARS 32
     uint32_t sh_vars[ACUDA_MAX_SHVARS];
+    // One Workgroup u32 used as a spinlock when a 64-bit shared atomic
+    // has to be expressed on the u32-viewed shared array (lifted SASS
+    // declares __shared as bytes, so no u64 pointer exists).
+    uint32_t sh_lock_var;
     // Function-scope .local variables (Private per-invocation storage,
     // one u32-word array per variable, uninitialized like CUDA).
     const ptx_shvar_t *locals;

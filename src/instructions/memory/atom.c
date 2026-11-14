@@ -233,6 +233,197 @@ static uint32_t atom_packed_add_loop(ctx_t *c, spv_blob_t *b, uint32_t ptr,
     return prev;
 }
 
+// Acquire/release a Workgroup-level spinlock (one per workgroup).
+static void atom_lock_acquire(ctx_t *c, spv_blob_t *b) {
+    uint32_t scope = const_u32(c, 2);
+    uint32_t sem = const_u32(c, 0x102u); // Acquire|Workgroup
+    uint32_t header = nid(c), merge = nid(c), cont = nid(c);
+    emit_branch(c, b, header);
+    put(c, b, (2u << 16) | S_Label);
+    put(c, b, header);
+    uint32_t prev = nid(c);
+    put(c, b, (9u << 16) | S_AtomicCAS);
+    put(c, b, c->t_u32);
+    put(c, b, prev);
+    put(c, b, c->sh_lock_var);
+    put(c, b, scope);
+    put(c, b, sem);
+    put(c, b, sem);
+    put(c, b, const_u32(c, 1));
+    put(c, b, const_u32(c, 0));
+    uint32_t got = nid(c);
+    put(c, b, (5u << 16) | S_IEqual);
+    put(c, b, c->t_bool);
+    put(c, b, got);
+    put(c, b, prev);
+    put(c, b, const_u32(c, 0));
+    put(c, b, (4u << 16) | S_LoopMerge);
+    put(c, b, merge);
+    put(c, b, cont);
+    put(c, b, 0);
+    put(c, b, (4u << 16) | S_BranchCond);
+    put(c, b, got);
+    put(c, b, merge);
+    put(c, b, cont);
+    put(c, b, (2u << 16) | S_Label);
+    put(c, b, cont);
+    emit_branch(c, b, header);
+    put(c, b, (2u << 16) | S_Label);
+    put(c, b, merge);
+}
+
+static void atom_lock_release(ctx_t *c, spv_blob_t *b) {
+    uint32_t res = nid(c);
+    put(c, b, (7u << 16) | S_AtomicExchange);
+    put(c, b, c->t_u32);
+    put(c, b, res);
+    put(c, b, c->sh_lock_var);
+    put(c, b, const_u32(c, 2));
+    put(c, b, const_u32(c, 0x104u)); // Release|Workgroup
+    put(c, b, const_u32(c, 0));
+}
+
+// 64-bit shared atomic on the u32-viewed shared array (lifted SASS declares
+// __shared as bytes, so no native u64 pointer exists).  Serialise the
+// read/compare/write pair with a Workgroup spinlock; the result is the old
+// value, like a hardware atomic.
+static void emit_atom_shared64_locked(ctx_t *c, spv_blob_t *b,
+                                      const ptx_instr_t *in, int shvar,
+                                      uint32_t off, int line) {
+    if (!c->sh_lock_var) {
+        failf(c, line, "64-bit shared atomics need a shared lock variable");
+        return;
+    }
+    if (in->dst[0] && check_dst(c, in->dst, in->ty, line) != 0)
+        return;
+    uint32_t off1 = nid(c);
+    emit_arith(c, b, S_IAdd, c->t_u64, off1, off, const_u64(c, 4));
+    uint32_t p0 = sh_addr_ptr(c, b, shvar, off);
+    uint32_t p1 = sh_addr_ptr(c, b, shvar, off1);
+    if (c->failed)
+        return;
+    atom_lock_acquire(c, b);
+    if (c->failed)
+        return;
+    uint32_t lo = nid(c), hi = nid(c);
+    emit_load(c, b, c->t_u32, lo, p0);
+    emit_load(c, b, c->t_u32, hi, p1);
+    uint32_t lo64 = nid(c);
+    put(c, b, (4u << 16) | S_UConvert);
+    put(c, b, c->t_u64);
+    put(c, b, lo64);
+    put(c, b, lo);
+    uint32_t hi64 = nid(c);
+    put(c, b, (4u << 16) | S_UConvert);
+    put(c, b, c->t_u64);
+    put(c, b, hi64);
+    put(c, b, hi);
+    uint32_t high = nid(c);
+    emit_arith(c, b, S_Shl, c->t_u64, high, hi64, const_u64(c, 32));
+    uint32_t old = nid(c);
+    emit_arith(c, b, S_Or, c->t_u64, old, high, lo64);
+
+    uint32_t newv = 0;
+    int store = 1;
+    if (in->op == POP_ATOMCAS) {
+        val_t cmp = resolve(c, b, &in->src[1], PTY_U64, line);
+        if (c->failed)
+            return;
+        val_t swv = resolve(c, b, &in->src[2], PTY_U64, line);
+        if (c->failed)
+            return;
+        uint32_t eq = nid(c);
+        put(c, b, (5u << 16) | S_IEqual);
+        put(c, b, c->t_bool);
+        put(c, b, eq);
+        put(c, b, old);
+        put(c, b, cmp.id);
+        newv = nid(c);
+        put(c, b, (6u << 16) | S_Select);
+        put(c, b, c->t_u64);
+        put(c, b, newv);
+        put(c, b, eq);
+        put(c, b, swv.id);
+        put(c, b, old);
+    } else if (in->ty == PTY_F64) {
+        if (in->atom_op != 0) {
+            failf(c, line, "atom.f64 supports .add only");
+            return;
+        }
+        val_t add = resolve(c, b, &in->src[1], PTY_F64, line);
+        if (c->failed)
+            return;
+        uint32_t f = nid(c);
+        put(c, b, (4u << 16) | S_Bitcast);
+        put(c, b, c->t_f64);
+        put(c, b, f);
+        put(c, b, old);
+        uint32_t sum = nid(c);
+        emit_arith(c, b, S_FAdd, c->t_f64, sum, f, add.id);
+        newv = nid(c);
+        put(c, b, (4u << 16) | S_Bitcast);
+        put(c, b, c->t_u64);
+        put(c, b, newv);
+        put(c, b, sum);
+    } else {
+        val_t v = resolve(c, b, &in->src[1], PTY_U64, line);
+        if (c->failed)
+            return;
+        uint32_t opc;
+        switch (in->atom_op) {
+        case 0: opc = S_IAdd; break;
+        case 3: opc = S_And; break;
+        case 4: opc = S_Or; break;
+        case 5: opc = S_Xor; break;
+        case 6: // exchange stores the operand unconditionally
+            newv = v.id;
+            break;
+        default:
+            failf(c, line, "unsupported shared 64-bit atom");
+            return;
+        }
+        if (newv == 0) {
+            newv = nid(c);
+            emit_arith(c, b, opc, c->t_u64, newv, old, v.id);
+        }
+    }
+    if (c->failed)
+        return;
+    if (store) {
+        uint32_t nlo = nid(c);
+        put(c, b, (4u << 16) | S_UConvert);
+        put(c, b, c->t_u32);
+        put(c, b, nlo);
+        put(c, b, newv);
+        uint32_t nhi64 = nid(c);
+        emit_arith(c, b, S_ShrL, c->t_u64, nhi64, newv, const_u64(c, 32));
+        uint32_t nhi = nid(c);
+        put(c, b, (4u << 16) | S_UConvert);
+        put(c, b, c->t_u32);
+        put(c, b, nhi);
+        put(c, b, nhi64);
+        put(c, b, (3u << 16) | S_Store);
+        put(c, b, p0);
+        put(c, b, nlo);
+        put(c, b, (3u << 16) | S_Store);
+        put(c, b, p1);
+        put(c, b, nhi);
+    }
+    atom_lock_release(c, b);
+    if (in->dst[0]) {
+        if (in->ty == PTY_F64) {
+            uint32_t f = nid(c);
+            put(c, b, (4u << 16) | S_Bitcast);
+            put(c, b, c->t_f64);
+            put(c, b, f);
+            put(c, b, old);
+            def_val(c, in->dst, PTY_F64, f);
+        } else {
+            def_val(c, in->dst, PTY_U64, old);
+        }
+    }
+}
+
 // 64-bit shared atomics on a .u64-typed shared variable: Workgroup
 // storage is a native u64 array, so the hardware atomic ops (including
 // 64-bit CAS) work directly.
@@ -240,8 +431,7 @@ static void emit_atom_shared64(ctx_t *c, spv_blob_t *b,
                                const ptx_instr_t *in, int shvar,
                                uint32_t off, int line) {
     if (c->shvars[shvar].elem != 8) {
-        failf(c, line,
-              "64-bit shared atomics require a .u64 shared variable");
+        emit_atom_shared64_locked(c, b, in, shvar, off, line);
         return;
     }
     if (in->dst[0] && check_dst(c, in->dst, in->ty, line) != 0)
