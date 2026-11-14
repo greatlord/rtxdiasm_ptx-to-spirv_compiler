@@ -107,6 +107,11 @@ typedef struct acuda_kernel_info {
     // appends one address per entry in bda_param[]; addr_push_bytes is
     // the size of that region at the end of the push-constant block.
     uint32_t bda;
+    // 1 when the shader resolves raw 64-bit device addresses
+    // (PhysicalStorageBuffer). The runtime cannot track which buffers
+    // such a kernel touches, so it inserts a global memory barrier
+    // around the dispatch.
+    uint32_t uses_bda_access;
     uint32_t addr_push_bytes;
     uint32_t bda_param[ACUDA_MAX_PARAMS]; // binding/user-pointer indices
     // 1 when the kernel may write through this pointer binding (dense

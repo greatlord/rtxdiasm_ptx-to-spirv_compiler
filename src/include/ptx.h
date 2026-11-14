@@ -446,6 +446,8 @@ typedef struct {
     int uses_barrier;  // kernel uses workgroup/barrier primitives
     int requires_float64; // 0 unknown, 1 no, 2 requires shaderFloat64
     int bda;           // kernel uses PhysicalStorageBuffer addresses
+    int uses_bda_access; // kernel resolves raw device addresses (global
+                         // memory access not tracked per buffer)
     int n_bda;         // number of pointer params passed as addresses
     int bda_param[ACUDA_MAX_PARAMS]; // binding indices, address slot order
     int addr_base_word;              // first address push word

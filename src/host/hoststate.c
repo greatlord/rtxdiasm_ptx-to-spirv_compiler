@@ -1691,9 +1691,20 @@ void emit_cfg_machine(ctx_t *c, const ptx_func_t *fn) {
     put(c, &c->fn, (2u << 16) | S_Branch);
     put(c, &c->fn, load);
 
+    // A single switch with one case per PTX block gives every lifted
+    // register a live range spanning the whole dispatch; on large
+    // functions (compute_mode has 932 blocks) ACO's register allocator
+    // then runs off the rails.  Split the dispatch into fixed-size
+    // chunks: the per-block register reload only happens inside the
+    // chunk that is actually executing, so live ranges span at most one
+    // chunk.  Semantics are unchanged (same reload before the case and
+    // same save at its end).
+    enum { CFG_CHUNK_BLOCKS = 32 };
+    int chunked = fn->nblocks > (size_t)(2 * CFG_CHUNK_BLOCKS);
     put(c, &c->fn, (2u << 16) | S_Label);
     put(c, &c->fn, load);
-    sm_define_regs(c, &c->fn);
+    if (!chunked)
+        sm_define_regs(c, &c->fn);
     if (c->failed)
         return;
     reg_t *hdr_regs = malloc(sizeof(*hdr_regs) *
@@ -1752,31 +1763,100 @@ void emit_cfg_machine(ctx_t *c, const ptx_func_t *fn) {
         put(c, &c->fn, pc);
         put(c, &c->fn, const_u32(c, 0xffffffffu));
     }
-    put(c, &c->fn, (3u << 16) | S_SelectionMerge);
-    put(c, &c->fn, done);
-    put(c, &c->fn, 0);
-    put(c, &c->fn, (uint32_t)((3u + 2u * (uint32_t)fn->nblocks) << 16) |
-                       S_Switch);
-    put(c, &c->fn, dpc);
-    put(c, &c->fn, done);
-    for (size_t i = 0; i < fn->nblocks; i++) {
-        put(c, &c->fn, (uint32_t)i);
-        put(c, &c->fn, c->block_ids[i]);
-    }
-    for (size_t i = 0; i < fn->nblocks && !c->failed; i++) {
-        memcpy(c->regs, hdr_regs,
-               sizeof(*hdr_regs) * (size_t)c->nregs);
-        c->c_tid = 0;
-        c->c_ctaid = 0;
-        c->c_ntid = 0;
-        if (getenv("ACUDA_TRACE")) {
-            for (int _di = 0; _di < c->nregs; _di++) {
-                reg_t *_dr = &c->regs[_di];
-                if (_dr->binding == -2 && _dr->lovar < 0 && _dr->is_ptr && !_dr->dyn_home)
-                    fprintf(stderr, "acuda-local-warn post-hdr case %zu r%d(%s) bind=%d lovar=%d\n", i, _di, _dr->name, _dr->binding, _dr->lovar);
-            }
+    if (!chunked) {
+        put(c, &c->fn, (3u << 16) | S_SelectionMerge);
+        put(c, &c->fn, done);
+        put(c, &c->fn, 0);
+        put(c, &c->fn, (uint32_t)((3u + 2u * (uint32_t)fn->nblocks) << 16) |
+                           S_Switch);
+        put(c, &c->fn, dpc);
+        put(c, &c->fn, done);
+        for (size_t i = 0; i < fn->nblocks; i++) {
+            put(c, &c->fn, (uint32_t)i);
+            put(c, &c->fn, c->block_ids[i]);
         }
-        cfg_emit_case(c, &c->fn, fn, (int)i, done);
+        for (size_t i = 0; i < fn->nblocks && !c->failed; i++) {
+            memcpy(c->regs, hdr_regs,
+                   sizeof(*hdr_regs) * (size_t)c->nregs);
+            c->c_tid = 0;
+            c->c_ctaid = 0;
+            c->c_ntid = 0;
+            cfg_emit_case(c, &c->fn, fn, (int)i, done);
+        }
+    } else {
+        int nchunks = ((int)fn->nblocks + CFG_CHUNK_BLOCKS - 1) /
+                      CFG_CHUNK_BLOCKS;
+        uint32_t *chunk_lbl = calloc((size_t)nchunks, sizeof(uint32_t));
+        uint32_t *chunk_done = calloc((size_t)nchunks, sizeof(uint32_t));
+        if (!chunk_lbl || !chunk_done) {
+            free(chunk_lbl);
+            free(chunk_done);
+            free(hdr_regs);
+            fail(c, "out of memory");
+            return;
+        }
+        for (int q = 0; q < nchunks; q++) {
+            chunk_lbl[q] = nid(c);
+            chunk_done[q] = nid(c);
+        }
+        unsigned shift = 5; // log2(CFG_CHUNK_BLOCKS)
+        uint32_t cidx = nid(c);
+        emit_arith(c, &c->fn, S_ShrL, c->t_u32, cidx, dpc,
+                   const_u32(c, shift));
+        put(c, &c->fn, (3u << 16) | S_SelectionMerge);
+        put(c, &c->fn, done);
+        put(c, &c->fn, 0);
+        put(c, &c->fn, (uint32_t)((3u + 2u * (uint32_t)nchunks) << 16) |
+                           S_Switch);
+        put(c, &c->fn, cidx);
+        put(c, &c->fn, done);
+        for (int q = 0; q < nchunks; q++) {
+            put(c, &c->fn, (uint32_t)q);
+            put(c, &c->fn, chunk_lbl[q]);
+        }
+        for (int q = 0; q < nchunks && !c->failed; q++) {
+            int lo = q * CFG_CHUNK_BLOCKS;
+            int hi = lo + CFG_CHUNK_BLOCKS;
+            if ((size_t)hi > fn->nblocks)
+                hi = (int)fn->nblocks;
+            put(c, &c->fn, (2u << 16) | S_Label);
+            put(c, &c->fn, chunk_lbl[q]);
+            sm_define_regs(c, &c->fn);
+            if (c->failed)
+                break;
+            // Snapshot the canonical post-load state: each case starts
+            // from it, like the header reload in the flat dispatch.
+            memcpy(hdr_regs, c->regs,
+                   sizeof(*hdr_regs) * (size_t)c->nregs);
+            uint32_t inner = nid(c);
+            emit_arith(c, &c->fn, S_And, c->t_u32, inner, dpc,
+                       const_u32(c, (uint32_t)(CFG_CHUNK_BLOCKS - 1)));
+            put(c, &c->fn, (3u << 16) | S_SelectionMerge);
+            put(c, &c->fn, chunk_done[q]);
+            put(c, &c->fn, 0);
+            put(c, &c->fn, (uint32_t)((3u + 2u * (uint32_t)(hi - lo)) << 16) |
+                               S_Switch);
+            put(c, &c->fn, inner);
+            put(c, &c->fn, chunk_done[q]);
+            for (int i = lo; i < hi; i++) {
+                put(c, &c->fn, (uint32_t)(i - lo));
+                put(c, &c->fn, c->block_ids[i]);
+            }
+            for (int i = lo; i < hi && !c->failed; i++) {
+                memcpy(c->regs, hdr_regs,
+                       sizeof(*hdr_regs) * (size_t)c->nregs);
+                c->c_tid = 0;
+                c->c_ctaid = 0;
+                c->c_ntid = 0;
+                cfg_emit_case(c, &c->fn, fn, i, chunk_done[q]);
+            }
+            put(c, &c->fn, (2u << 16) | S_Label);
+            put(c, &c->fn, chunk_done[q]);
+            put(c, &c->fn, (2u << 16) | S_Branch);
+            put(c, &c->fn, done);
+        }
+        free(chunk_lbl);
+        free(chunk_done);
     }
     free(hdr_regs);
     if (c->failed)

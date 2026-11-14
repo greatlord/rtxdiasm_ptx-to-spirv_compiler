@@ -633,6 +633,8 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                         meta->bda_param[nb++] = b;
                 }
             }
+            if (meta)
+                meta->uses_bda_access = ctx->use_bda;
             if (meta) {
                 meta->bda = nb > 0;
                 meta->addr_base_word = base;

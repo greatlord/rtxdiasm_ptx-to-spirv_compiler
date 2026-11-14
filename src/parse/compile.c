@@ -652,6 +652,7 @@ static acuda_status_t compile_func(const ptx_unit_t *unit,
     k->info.uses_barrier = (uint32_t)meta.uses_barrier;
     k->info.requires_float64 = (uint32_t)meta.requires_float64;
     k->info.bda = (uint32_t)meta.bda;
+    k->info.uses_bda_access = (uint32_t)meta.uses_bda_access;
     k->info.addr_push_bytes = (uint32_t)meta.n_bda * 8u;
     for (int bp = 0; bp < ACUDA_MAX_PARAMS; bp++)
         k->info.bda_param[bp] =
