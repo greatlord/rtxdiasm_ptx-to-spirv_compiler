@@ -107,7 +107,7 @@ typedef enum {
     OPD_UNDEF // synthesized unknown value (predicated-desugar false arm)
 } ptx_opd_kind_t;
 
-typedef enum { SPC_TID, SPC_NTID, SPC_CTAID, SPC_NCTAID, SPC_LANEID, SPC_LANEMASKLT, SPC_LANEMASKLE } ptx_special_t;
+typedef enum { SPC_TID, SPC_NTID, SPC_CTAID, SPC_NCTAID, SPC_LANEID, SPC_LANEMASKLT, SPC_LANEMASKLE, SPC_LANEMASKGE, SPC_LANEMASKGT, SPC_LANEMASKEQ } ptx_special_t;
 
 typedef struct {
     ptx_opd_kind_t kind;

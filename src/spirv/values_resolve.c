@@ -46,7 +46,8 @@ void emit_extract(ctx_t *c, spv_blob_t *b, uint32_t id, uint32_t vec,
 
 uint32_t special_comp(ctx_t *c, spv_blob_t *b, ptx_special_t sp,
                              int comp, int line) {
-    if (sp == SPC_LANEID || sp == SPC_LANEMASKLT || sp == SPC_LANEMASKLE) {
+    if (sp == SPC_LANEID || sp == SPC_LANEMASKLT || sp == SPC_LANEMASKLE ||
+        sp == SPC_LANEMASKGE || sp == SPC_LANEMASKGT || sp == SPC_LANEMASKEQ) {
         // Lane id within the 32-thread warp + lanes mask. Pure functions
         // of tid.x (exact, no divergence involved).
         uint32_t tid = special_comp(c, b, SPC_TID, 0, line);
@@ -55,6 +56,28 @@ uint32_t special_comp(ctx_t *c, spv_blob_t *b, ptx_special_t sp,
         if (sp == SPC_LANEID)
             return lane;
         uint32_t sh = nid(c), m1 = nid(c);
+        if (sp == SPC_LANEMASKGE) {
+            // lanes >= lane: 0xffffffff << lane (shift 0..31).
+            emit_arith(c, b, S_Shl, c->t_u32, m1, const_u32(c, 0xffffffffu),
+                       lane);
+            return m1;
+        }
+        if (sp == SPC_LANEMASKGT) {
+            // lanes > lane: complement of the lanes-<= mask.
+            uint32_t inv = nid(c);
+            emit_arith(c, b, S_ISub, c->t_u32, inv, const_u32(c, 31), lane);
+            emit_arith(c, b, S_ShrL, c->t_u32, sh, const_u32(c, 0xffffffffu),
+                       inv);
+            put(c, b, (4u << 16) | S_Not); // unary: OpNot
+            put(c, b, c->t_u32);
+            put(c, b, m1);
+            put(c, b, sh);
+            return m1;
+        }
+        if (sp == SPC_LANEMASKEQ) {
+            emit_arith(c, b, S_Shl, c->t_u32, m1, const_u32(c, 1), lane);
+            return m1;
+        }
         if (sp == SPC_LANEMASKLE) {
             // lanes 0..lane: 0xffffffff >> (31 - lane). Written this way
             // so lane 31 never shifts by 32 (undefined in SPIR-V).

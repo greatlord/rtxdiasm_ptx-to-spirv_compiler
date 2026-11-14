@@ -437,6 +437,24 @@ int parse_operand(parser_t *p, ptx_opd_t *op) {
         op->comp = 0;
         return 0;
     }
+    if (strcmp(t.text, "%lanemask_ge") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_LANEMASKGE;
+        op->comp = 0;
+        return 0;
+    }
+    if (strcmp(t.text, "%lanemask_gt") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_LANEMASKGT;
+        op->comp = 0;
+        return 0;
+    }
+    if (strcmp(t.text, "%lanemask_eq") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_LANEMASKEQ;
+        op->comp = 0;
+        return 0;
+    }
     if (strcmp(t.text, "%tid.x") == 0 || strcmp(t.text, "%tid.y") == 0 ||
         strcmp(t.text, "%tid.z") == 0) {
         op->kind = OPD_SPECIAL;
