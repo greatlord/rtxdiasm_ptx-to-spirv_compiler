@@ -29,6 +29,12 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+## Copyright and authorship
+
+Copyright 2026 by Magnus Olsen.
+
+This compiler code was written with the use of [OpenCode](https://opencode.ai) with models DeepFlash 4.1, Muse Spark 1.3, and Iceman.
+
 ## License
 
 MIT (see `LICENSE`).
