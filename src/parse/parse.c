@@ -1663,6 +1663,8 @@ int ptx_parse(const char *src, ptx_unit_t *unit, char *err, size_t errlen) {
     return 0;
 fail:
     free(p.sbind);
+    if (err && errlen > 0 && err[0] == '\0')
+        snprintf(err, errlen, "PTX parse error (no detail)");
     ptx_unit_free(unit);
     return -1;
 }
