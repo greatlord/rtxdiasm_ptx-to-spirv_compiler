@@ -1119,8 +1119,12 @@ acuda_status_t acuda_ptx_validate(const char *ptx_text,
     ptx_unit_t unit;
     memset(&unit, 0, sizeof(unit));
     if (ptx_parse(ptx_text, &unit, err, sizeof(err)) != 0) {
-        if (errbuf && errlen > 0)
-            snprintf(errbuf, errlen, "PTX parse error: %s", err);
+        if (errbuf && errlen > 0) {
+            if (err[0] == '\0')
+                snprintf(errbuf, errlen, "PTX parse error (no detail)");
+            else
+                snprintf(errbuf, errlen, "PTX parse error: %s", err);
+        }
         ptx_unit_free(&unit);
         return ACUDA_ERROR_NOT_SUPPORTED;
     }
