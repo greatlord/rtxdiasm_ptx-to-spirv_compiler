@@ -3919,11 +3919,13 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         return block_add_instr(fn, bi, &in, p, opline);
     }
     if (strcmp(parts[0], "cvt") == 0 && np == 4 && strcmp(parts[1], "ftz") == 0 &&
-        strcmp(parts[2], "f64") == 0 && strcmp(parts[3], "f32") == 0) {
+        ((strcmp(parts[2], "f64") == 0 && strcmp(parts[3], "f32") == 0) ||
+         (strcmp(parts[2], "f32") == 0 && strcmp(parts[3], "f32") == 0))) {
         // Flush-to-zero widening (denormal f32 inputs flush; the exact
-        // widening itself never creates f64 denormals from normals).
+        // widening itself never creates f64 denormals from normals) and
+        // flush-to-zero f32 identity (PhysX fluid hashing emits it).
         in.op = POP_CVT;
-        in.ty = PTY_F64;
+        in.ty = strcmp(parts[2], "f64") == 0 ? PTY_F64 : PTY_F32;
         in.ty2 = PTY_F32;
         in.ftz = 1;
         if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
