@@ -89,6 +89,22 @@ void emit_cvt_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             def_val(c, in->dst, PTY_U32, out);
             return;
         }
+        if (in->ty == PTY_F32 && in->ty2 == PTY_F32) {
+            // float identity (cvt[.ftz].f32.f32): a plain copy.  The
+            // .ftz modifier flushes denormal inputs to signed zero; the
+            // copy itself can never create a denormal.
+            a = resolve(c, b, &in->src[0], PTY_F32, line);
+            if (c->failed)
+                return;
+            uint32_t fa = a.id;
+            if (in->ftz) {
+                fa = flush_f32_denorm(c, b, fa, line);
+                if (c->failed)
+                    return;
+            }
+            def_val(c, in->dst, PTY_F32, fa);
+            return;
+        }
         if (in->ty == PTY_F64 && in->ty2 == PTY_F32) {
             // Exact widening. Under emulation this is a plain copy.
             a = resolve(c, b, &in->src[0], PTY_F32, line);
