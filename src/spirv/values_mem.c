@@ -989,12 +989,18 @@ uint32_t atom_fadd_loop(ctx_t *c, spv_blob_t *b, uint32_t ptr,
     uint32_t scope = const_u32(c, is_shared ? 2 : 1); // Workgroup/Device
     uint32_t sem_eq = const_u32(c, is_shared ? 0x108u : 0x48u);
     uint32_t sem_ne = const_u32(c, is_shared ? 0x102u : 0x42u);
+    uint32_t sem_ld = const_u32(c, is_shared ? 0x100u : 0x40u); // Acquire
     uint32_t header = nid(c), merge = nid(c), cont = nid(c);
     emit_branch(c, b, header);
     put(c, b, (2u << 16) | S_Label);
     put(c, b, header);
     uint32_t old_bits = nid(c);
-    emit_load(c, b, c->t_u32, old_bits, ptr);
+    put(c, b, (6u << 16) | S_AtomicLoad);
+    put(c, b, c->t_u32);
+    put(c, b, old_bits);
+    put(c, b, ptr);
+    put(c, b, scope);
+    put(c, b, sem_ld);
     uint32_t old_f = nid(c);
     put(c, b, (4u << 16) | S_Bitcast);
     put(c, b, c->t_f32);
