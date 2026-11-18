@@ -1417,6 +1417,27 @@ int ptx_parse(const char *src, ptx_unit_t *unit, char *err, size_t errlen) {
             unit->addr_size = (int)t.imm;
             continue;
         }
+        if (strcmp(t.text, ".loc") == 0 || strcmp(t.text, ".file") == 0) {
+            // Debug line table at module scope (`.file index "name"` is
+            // emitted after the entries by nvcc 13; `.loc` can precede
+            // the first directive of a body). Newline-terminated and
+            // semantically inert, so drop the line.
+            int dline = t.line;
+            for (;;) {
+                ptx_tok_t u;
+                if (next(&p, &u) != 0)
+                    goto fail;
+                if (u.kind == T_EOF)
+                    break;
+                if (u.kind == T_PUNCT && u.punct == ';')
+                    break;
+                if (u.line != dline) {
+                    ptx_unget(&p.lx, &u);
+                    break;
+                }
+            }
+            continue;
+        }
         // `.weak` is the old-toolchain spelling of weak linkage (CUDA 4.x
         // fatbins are full of `.weak .func` stubs).  Treat it like
         // `.visible`: only the entry/func body matters for validation.

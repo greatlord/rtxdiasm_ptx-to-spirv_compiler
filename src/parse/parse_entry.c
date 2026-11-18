@@ -1391,6 +1391,29 @@ attrs_done:;
                 return -1;
             continue;
         }
+        if (strcmp(t.text, ".loc") == 0 ||
+            strcmp(t.text, ".file") == 0) {
+            // Debug line table (`.loc file line [column][, func]`,
+            // `.file index "name"`): newline-terminated, no semantic
+            // content for code generation. nvcc emits both when the
+            // source carries line info, so drop the whole line.
+            // (parse.c takes the same directives at module scope.)
+            int dline = t.line;
+            for (;;) {
+                ptx_tok_t u;
+                if (next(p, &u) != 0)
+                    return -1;
+                if (u.kind == T_EOF)
+                    break;
+                if (u.kind == T_PUNCT && u.punct == ';')
+                    break;
+                if (u.line != dline) {
+                    ptx_unget(&p->lx, &u);
+                    break;
+                }
+            }
+            continue;
+        }
         if (strcmp(t.text, ".pragma") == 0) {
             // Optimization hints (numba emits .pragma "nounroll" on
             // remainder loops): no semantic content, skip to ';'.
