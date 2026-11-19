@@ -1580,6 +1580,35 @@ int ptx_parse(const char *src, ptx_unit_t *unit, char *err, size_t errlen) {
                 goto fail;
             continue;
         }
+        if (strcmp(t.text, ".section") == 0) {
+            // Debug/info sections are not needed for compilation; skip them.
+            ptx_tok_t u;
+            int depth = 0;
+            int saw_brace = 0;
+            for (;;) {
+                if (next(&p, &u) != 0)
+                    goto fail;
+                if (u.kind == T_EOF) {
+                    perr(&p, t.line, "unterminated .section");
+                    goto fail;
+                }
+                if (u.kind == T_PUNCT && u.punct == '{') {
+                    saw_brace = 1;
+                    depth++;
+                    continue;
+                }
+                if (u.kind == T_PUNCT && u.punct == '}') {
+                    if (depth > 0)
+                        depth--;
+                    if (saw_brace && depth == 0)
+                        break;
+                    continue;
+                }
+                if (!saw_brace && depth == 0 && u.kind == T_PUNCT && u.punct == ';')
+                    break;
+            }
+            continue;
+        }
         {
             char m[640];
             snprintf(m, sizeof(m), "unsupported top-level directive '%s'", t.text);

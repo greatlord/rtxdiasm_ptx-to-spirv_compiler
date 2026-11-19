@@ -39,40 +39,70 @@ int parse_atom_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         ptx_instr_t in;
         memset(&in, 0, sizeof(in));
         in.line = opline;
-        int pi = 1; // past "atom"
-        if (pi < anp && (strcmp(ap[pi], "relaxed") == 0 ||
-                         strcmp(ap[pi], "acquire") == 0 ||
-                         strcmp(ap[pi], "release") == 0 ||
-                         strcmp(ap[pi], "acq_rel") == 0))
-            pi++;
-        if (pi < anp && (strcmp(ap[pi], "cta") == 0 ||
-                         strcmp(ap[pi], "cluster") == 0 ||
-                         strcmp(ap[pi], "gpu") == 0 ||
-                         strcmp(ap[pi], "sys") == 0))
-            pi++;
         in.space = PSP_GENERIC;
-        if (pi < anp && strcmp(ap[pi], "global") == 0) {
-            in.space = PSP_GLOBAL;
-            pi++;
-        } else if (pi < anp &&
-                   (strcmp(ap[pi], "shared") == 0 ||
-                    strcmp(ap[pi], "shared::cta") == 0 ||
-                    strcmp(ap[pi], "shared::cluster") == 0)) {
-            // .shared::cluster (distributed shared memory) is treated
-            // as .shared::cta for a single-CTA cluster approximation.
-            in.space = PSP_SHARED;
-            pi++;
-        }
         int has_cache_hint = 0;
-        if (pi < anp && strcmp(ap[pi], "L2::cache_hint") == 0) {
-            has_cache_hint = 1;
-            pi++;
+        const char *aop = NULL;
+        int ty_idx = -1;
+        /* PTX qualifier order varies across ISA versions/forms (e.g.
+         * atom{.sem}{.scope}{.space}.op.type vs atom.op{.sem}{.scope}.type).
+         * Classify tokens flexibly instead of assuming a fixed sequence. */
+        for (int i = 1; i < anp; i++) {
+            const char *t = ap[i];
+            if (strcmp(t, "relaxed") == 0 || strcmp(t, "acquire") == 0 ||
+                strcmp(t, "release") == 0 || strcmp(t, "acq_rel") == 0) {
+                continue;
+            }
+            if (strcmp(t, "cta") == 0 || strcmp(t, "cluster") == 0 ||
+                strcmp(t, "gpu") == 0 || strcmp(t, "sys") == 0) {
+                continue;
+            }
+            if (strcmp(t, "global") == 0) {
+                in.space = PSP_GLOBAL;
+                continue;
+            }
+            if (strcmp(t, "shared") == 0 ||
+                strcmp(t, "shared::cta") == 0 ||
+                strcmp(t, "shared::cluster") == 0) {
+                in.space = PSP_SHARED;
+                continue;
+            }
+            if (strcmp(t, "L2::cache_hint") == 0) {
+                has_cache_hint = 1;
+                continue;
+            }
+            if (strcmp(t, "noftz") == 0) {
+                continue;
+            }
+            if (!aop && (strcmp(t, "add") == 0 || strcmp(t, "inc") == 0 ||
+                         strcmp(t, "dec") == 0 || strcmp(t, "and") == 0 ||
+                         strcmp(t, "or") == 0 || strcmp(t, "xor") == 0 ||
+                         strcmp(t, "exch") == 0 || strcmp(t, "min") == 0 ||
+                         strcmp(t, "max") == 0 || strcmp(t, "cas") == 0)) {
+                aop = t;
+                continue;
+            }
+            {
+                /* Distinguish type tokens from unknown ops/qualifiers for better diagnostics. */
+                ptx_ty_t ty_tmp;
+                if (map_ty(t, &ty_tmp) == 0) {
+                    if (ty_idx < 0) {
+                        ty_idx = i;
+                        continue;
+                    }
+                } else if (!aop) {
+                    char m[640];
+                    snprintf(m, sizeof(m), "unsupported atom op '%s'", t);
+                    perr(p, opline, m);
+                    return -1;
+                }
+            }
+            perr(p, opline, "unsupported atom form");
+            return -1;
         }
-        if (pi >= anp) {
+        if (!aop) {
             perr(p, opline, "atom needs an op (.add/.inc/.cas)");
             return -1;
         }
-        const char *aop = ap[pi];
         int is_add = strcmp(aop, "add") == 0;
         int is_inc = strcmp(aop, "inc") == 0;
         int is_dec = strcmp(aop, "dec") == 0;
@@ -83,38 +113,19 @@ int parse_atom_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         int is_min = strcmp(aop, "min") == 0;
         int is_max = strcmp(aop, "max") == 0;
         int is_cas = strcmp(aop, "cas") == 0;
-        if (!is_add && !is_inc && !is_dec && !is_and && !is_or &&
-            !is_xor && !is_exch && !is_min && !is_max && !is_cas) {
-            char m[640];
-            snprintf(m, sizeof(m), "unsupported atom op '%s'", aop);
-            perr(p, opline, m);
-            return -1;
-        }
-        pi++;
-        if (pi < anp && strcmp(ap[pi], "noftz") == 0)
-            pi++;
-        if (pi < anp && strcmp(ap[pi], "L2::cache_hint") == 0) {
-            has_cache_hint = 1;
-            pi++;
-        }
-        if (pi >= anp) {
+        if (ty_idx < 0) {
             perr(p, opline, "atom needs a type (.b32/.b64/.u32/.s32/.u64/.s64/.f32/.f64)");
             return -1;
         }
-        if (map_ty(ap[pi], &in.ty) != 0) {
+        if (map_ty(ap[ty_idx], &in.ty) != 0) {
             char m[640];
-            snprintf(m, sizeof(m), "unsupported atom type '%s'", ap[pi]);
+            snprintf(m, sizeof(m), "unsupported atom type '%s'", ap[ty_idx]);
             perr(p, opline, m);
             return -1;
         }
         {
-            const char *ts = ap[pi][0] == '.' ? ap[pi] + 1 : ap[pi];
+            const char *ts = ap[ty_idx][0] == '.' ? ap[ty_idx] + 1 : ap[ty_idx];
             in.sign = ts[0] == 's';
-        }
-        pi++;
-        if (pi != anp) {
-            perr(p, opline, "unsupported atom form");
-            return -1;
         }
         if (is_red && (is_cas || is_exch)) {
             perr(p, opline, "red does not support .cas/.exch");
