@@ -140,9 +140,13 @@ void emit_barrier_group_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
         // keep only their half of the ordering.
         uint32_t scope = const_u32(
             c, (in->fence_scope == 0 || in->fence_scope == 1) ? 2u : 1u);
-        /* Device-scope memory barriers in tight CAS loops can trigger
-         * severe driver slowdowns/hangs on some implementations; prefer
-         * Workgroup scope for non-proxy fences as a pragmatic fallback. */
+        /* Device/system-scope memory barriers in tight CAS loops can
+         * trigger severe driver slowdowns/hangs or pipeline compilation
+         * issues on some Vulkan implementations.  Downgrade non-proxy
+         * device/gpu/sys-scope fences to workgroup scope as a compatibility
+         * fallback; atomics and explicit ld/st ordering carry most ordering
+         * in common lifted-libcu++ CAS patterns, while preserving a barrier
+         * for PTX-path kernels that may rely on membar/fence presence. */
         if (in->arg == 0 && in->fence_scope >= 2)
             scope = const_u32(c, 2u);
         uint32_t sem = const_u32(
