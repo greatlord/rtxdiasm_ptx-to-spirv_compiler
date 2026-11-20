@@ -204,6 +204,8 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         return -1;
     }
     int has_cache_hint = 0;
+    int ldst_mem_sem = 0;
+    int ldst_mem_scope = 0;
     if ((strcmp(parts[0], "ld") == 0 || strcmp(parts[0], "st") == 0) &&
         np > 1) {
         int w = 1;
@@ -213,6 +215,24 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
             if (is_ldst_hint_token(parts[i])) {
                 if (strcmp(parts[i], "L2::cache_hint") == 0)
                     has_cache_hint = 1;
+                else if (strcmp(parts[i], "relaxed") == 0 || strcmp(parts[i], "weak") == 0)
+                    ldst_mem_sem = ldst_mem_sem < 1 ? 1 : ldst_mem_sem;
+                else if (strcmp(parts[i], "acquire") == 0)
+                    ldst_mem_sem = ldst_mem_sem < 2 ? 2 : ldst_mem_sem;
+                else if (strcmp(parts[i], "release") == 0)
+                    ldst_mem_sem = ldst_mem_sem < 3 ? 3 : ldst_mem_sem;
+                else if (strcmp(parts[i], "acq_rel") == 0 || strcmp(parts[i], "volatile") == 0)
+                    ldst_mem_sem = 4;
+                else if (strcmp(parts[i], "mmio") == 0)
+                    ldst_mem_sem = ldst_mem_sem < 4 ? 4 : ldst_mem_sem;
+                else if (strcmp(parts[i], "cta") == 0)
+                    ldst_mem_scope = 1;
+                else if (strcmp(parts[i], "cluster") == 0)
+                    ldst_mem_scope = 2;
+                else if (strcmp(parts[i], "gpu") == 0)
+                    ldst_mem_scope = 3;
+                else if (strcmp(parts[i], "sys") == 0)
+                    ldst_mem_scope = 4;
                 continue;
             }
             if (w != i)
@@ -4572,6 +4592,8 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         in.op = POP_LD;
         in.space = sp;
         in.ty = ty;
+        in.mem_sem = ldst_mem_sem;
+        in.mem_scope = ldst_mem_scope;
         if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
             return -1;
         if (expect_comma(p) != 0 || parse_operand(p, &in.src[0]) != 0)
@@ -4758,6 +4780,8 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                 li.op = POP_LD;
                 li.ty = elem;
                 li.space = space;
+                li.mem_sem = ldst_mem_sem;
+                li.mem_scope = ldst_mem_scope;
                 li.line = opline;
                 if (copy_name(li.dst, sizeof(li.dst), dd[i], p,
                               opline) != 0)
@@ -4801,6 +4825,8 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                 si.op = POP_ST;
                 si.ty = elem;
                 si.space = space;
+                si.mem_sem = ldst_mem_sem;
+                si.mem_scope = ldst_mem_scope;
                 si.line = opline;
                 si.src[0] = addr;
                 si.src[0].addr_imm += (int64_t)(i * w);
@@ -4824,6 +4850,8 @@ try_scalar_ldst:
         np == 2) {        int is_st = parts[0][1] == 't';
         in.op = is_st ? POP_ST : POP_LD;
         in.space = PSP_GENERIC;
+        in.mem_sem = ldst_mem_sem;
+        in.mem_scope = ldst_mem_scope;
         if (map_ty(parts[1], &in.ty) != 0 || in.ty == PTY_PRED ||
             in.ty == PTY_F16 || in.ty == PTY_BF16 ||
             in.ty == PTY_F16X2 || in.ty == PTY_BF16X2) {
@@ -4878,6 +4906,8 @@ try_scalar_ldst:
     }
     if (strcmp(parts[0], "ld") == 0 && np == 3) {
         in.op = POP_LD;
+        in.mem_sem = ldst_mem_sem;
+        in.mem_scope = ldst_mem_scope;
         if (strcmp(parts[1], "param") == 0 ||
             strcmp(parts[1], "param::entry") == 0 ||
             strcmp(parts[1], "param::func") == 0)
@@ -4931,10 +4961,18 @@ try_scalar_ldst:
         }
         if (expect_punct(p, ';', "after ld") != 0)
             return -1;
+        if (getenv("ACUDA_DEBUG_SYMBOLS") && in.src[0].kind == OPD_ADDR &&
+            in.src[0].addr_reg[0] && strcmp(in.src[0].addr_reg, "%rd3") == 0 &&
+            in.src[0].addr_imm == 12)
+            fprintf(stderr, "ACuda: parse ld dst=%s sp=%d ty=%d reg=%s imm=%lld line=%d fn=%s\n",
+                    in.dst, (int)in.space, (int)in.ty, in.src[0].addr_reg,
+                    (long long)in.src[0].addr_imm, opline, fn->name);
         return block_add_instr(fn, bi, &in, p, opline);
     }
     if (strcmp(parts[0], "st") == 0 && np == 3) {
         in.op = POP_ST;
+        in.mem_sem = ldst_mem_sem;
+        in.mem_scope = ldst_mem_scope;
         if (strcmp(parts[1], "param") == 0) {
             // Return-slot store (numba .funcABI) or call-slot store:
             // recorded for the post-parse pass, which drops writes to

@@ -140,6 +140,11 @@ void emit_barrier_group_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
         // keep only their half of the ordering.
         uint32_t scope = const_u32(
             c, (in->fence_scope == 0 || in->fence_scope == 1) ? 2u : 1u);
+        /* Device-scope memory barriers in tight CAS loops can trigger
+         * severe driver slowdowns/hangs on some implementations; prefer
+         * Workgroup scope for non-proxy fences as a pragmatic fallback. */
+        if (in->arg == 0 && in->fence_scope >= 2)
+            scope = const_u32(c, 2u);
         uint32_t sem = const_u32(
             c, (in->fence_sem == 1 ? 0x2u
                 : in->fence_sem == 2 ? 0x4u

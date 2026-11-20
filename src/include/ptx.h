@@ -161,6 +161,8 @@ typedef struct {
     int arg; // POP_BAR: barrier id (0..15), -1 for a dynamic full barrier
     int fence_sem;   // POP_MEMBAR: 0 = acq_rel/sc, 1 = acquire, 2 = release
     int fence_scope; // POP_MEMBAR: 0 cta, 1 cluster, 2 gpu, 3 sys
+    int mem_sem;     // POP_LD/POP_ST: 0 none/weak, 1 relaxed, 2 acquire, 3 release, 4 acq_rel/sc/volatile
+    int mem_scope;   // POP_LD/POP_ST: 0 unspecified, 1 cta, 2 cluster, 3 gpu, 4 sys
     int lop3_boolop; // POP_LOP3: 0 plain, 1 .or, 2 .and predicate output
     int tf32; // POP_CVT: cvt.{rn,rna}.tf32.f32
     int bar_arrive; // POP_BAR: 1 = bar.arrive (non-blocking arrival)
@@ -301,6 +303,8 @@ typedef struct {
     int is_internal; // compiler-synthesized host-call state/request param
     int is_tex;      // .param .texref/.samplerref (buffer-backed descriptor)
     int is_hidden_texref; // module-scope .texref injected as a hidden param
+    int is_hidden_symbol; // module-scope .global/.const injected as hidden BDA pointer param
+    char symbol_name[256]; // referenced module symbol name (for hidden symbol params)
     int wide_words;  // .param .u64xN: N-word by-value argument (0 = no)
     int wide_bytes;  // exact client byte size of a wide by-value blob
                      // (.b8[M] -> M, .u64xN -> N*8; 0 = not a blob)

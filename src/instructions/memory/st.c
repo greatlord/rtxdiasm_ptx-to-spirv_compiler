@@ -1,6 +1,21 @@
 #include "instructions/memory/memory.h"
 
+static void emit_st_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in);
+
 void emit_st_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
+    if (!c->failed && (in->mem_sem == 3 || in->mem_sem == 4)) {
+        /* Release barrier before release/acq_rel store. */
+        int scope = in->mem_scope;
+        uint32_t spv_scope = const_u32(c, (scope == 1 || scope == 2) ? 2u : 1u);
+        uint32_t spv_sem = const_u32(c, 0x4u | 0x40u | 0x100u);
+        put(c, b, (3u << 16) | S_MemoryBarrier);
+        put(c, b, spv_scope);
+        put(c, b, spv_sem);
+    }
+    emit_st_op_impl(c, b, in);
+}
+
+static void emit_st_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
     int line = in->line;
     val_t d;
         if (in->ty != PTY_U32 && in->ty != PTY_F32 && in->ty != PTY_F64 &&

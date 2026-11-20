@@ -2,9 +2,53 @@
 
 #include <string.h>
 
+static void emit_ldst_mem_barrier(ctx_t *c, spv_blob_t *b, int mem_sem, int mem_scope, int is_release_before_store) {
+    int sem = 0;
+    if (mem_sem == 2) sem = 0x2;       /* acquire */
+    else if (mem_sem == 3) sem = 0x4;  /* release */
+    else if (mem_sem == 4) sem = 0x8;  /* acq_rel/sc/volatile/mmio */
+    else return;
+    /* For stores, emit release semantics before the store. For loads, emit acquire semantics after. */
+    if (is_release_before_store) {
+        if (!(sem & 0x4)) return;
+        sem = 0x4;
+    } else {
+        if (!(sem & 0x2) && mem_sem != 4) return;
+        if (mem_sem == 4) sem = 0x2; /* acquire side after load */
+        else sem = 0x2;
+    }
+    uint32_t scope = const_u32(c, (mem_scope == 1 || mem_scope == 2) ? 2u : 1u);
+    uint32_t s = const_u32(c, (uint32_t)sem | 0x40u | 0x100u);
+    put(c, b, (3u << 16) | S_MemoryBarrier);
+    put(c, b, scope);
+    put(c, b, s);
+}
+
+static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in);
+
 void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
+    emit_ld_op_impl(c, b, in);
+    /* Acquire barrier after acquire/acq_rel loads is intentionally omitted:
+     * it can create driver-hostile SPIR-V patterns in tight loops; the
+     * compiler also lowers fences and atomics with strong semantics. */
+    (void)in;
+}
+
+static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
     int line = in->line;
     uint32_t id;
+        if (getenv("ACUDA_DEBUG_SYMBOLS") && in->src[0].kind == OPD_ADDR &&
+            in->src[0].addr_reg[0] && strcmp(in->src[0].addr_reg, "%rd3") == 0 &&
+            in->src[0].addr_imm == 12) {
+            reg_t *_ar = find_reg(c, in->src[0].addr_reg);
+            fprintf(stderr, "ACuda: ld dbg dst=%s op=%d sp=%d reg=%s imm=%lld ty=%d ar_def=%d ar_ptr=%d ar_paddr=%d ar_bind=%d ar_sh=%d ar_gl=%d dyn=%d\n",
+                    in->dst, (int)in->op, (int)in->space, in->src[0].addr_reg,
+                    (long long)in->src[0].addr_imm, (int)in->ty,
+                    _ar ? _ar->defined : -1, _ar ? _ar->is_ptr : -1,
+                    _ar ? _ar->paddr : -99, _ar ? _ar->binding : -99,
+                    _ar ? _ar->shvar : -99, _ar ? _ar->glvar : -99,
+                    _ar ? _ar->dyn_home : -99);
+        }
         if (in->space == PSP_PARAM) {
             if (in->src[0].kind != OPD_ADDR) {
                 failf(c, line, "ld.param needs [param_name]");
@@ -23,8 +67,14 @@ void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                     return;
                 }
                 if (in->src[0].addr_imm != 0) {
-                    failf(c, line,
-                          "offset into a parameter address unsupported");
+                    char _dbg[320];
+                    snprintf(_dbg, sizeof(_dbg),
+                             "offset into a parameter address unsupported (op=%d sp=%d dst=%s reg=%s paddr=%d imm=%lld pname=%s ty=%d nfn=%d)",
+                             (int)in->op, (int)in->space, in->dst, in->src[0].addr_reg, pr->paddr,
+                             (long long)in->src[0].addr_imm,
+                             (pr->paddr >= 0 && pr->paddr < c->nfnparams) ? c->fnparams[pr->paddr].name : "?",
+                             (int)in->ty, c->nfnparams);
+                    failf(c, line, _dbg);
                     return;
                 }
                 pname = c->fnparams[pr->paddr].name;
@@ -574,88 +624,88 @@ void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
         // routes by lineage: shared-tracked addresses use Workgroup
         // access, kernel-pointer addresses use SSBO access.
         if (in->space == PSP_CONST) {
-            // Register-indexed constant loads address a flattened Private
-            // image. Symbolic const addresses carry PTX_CONST_ADDR_BASE in
-            // bit 63; raw offsets (SASS constant-bank style) do not. Mask
-            // the tag before using the byte offset.
+            // Register-indexed constant loads may target either the flattened
+            // private const bank (offset tokens/scalars) or real device-backed
+            // pointers (e.g. module symbol buffers supplied at runtime). For
+            // pointer/BDA addresses, fall through to generic memory load paths.
             if (in->src[0].kind == OPD_ADDR && in->src[0].addr_reg[0]) {
-                if (!c->has_const_bank) {
-                    failf(c, line, "dynamic const bank was not allocated");
-                    return;
-                }
                 reg_t *ar = find_reg(c, in->src[0].addr_reg);
-                if (!ar || !ar->defined) {
-                    failf(c, line, "const address register has no value");
+                int use_const_bank = 0;
+                if (ar && ar->defined && !ar->is_ptr &&
+                    (ar->decl_ty == PTY_U32 || ar->decl_ty == PTY_U64)) {
+                    use_const_bank = 1;
+                }
+                if (use_const_bank) {
+                    if (!c->has_const_bank) {
+                        failf(c, line, "dynamic const bank was not allocated");
+                        return;
+                    }
+                    uint32_t off = ar->cur;
+                    if (ar->decl_ty == PTY_U32) {
+                        uint32_t wide = nid(c);
+                        put(c, b, (4u << 16) | S_UConvert);
+                        put(c, b, c->t_u64);
+                        put(c, b, wide);
+                        put(c, b, off);
+                        off = wide;
+                    }
+                    uint32_t raw = nid(c);
+                    emit_arith(c, b, S_And, c->t_u64, raw, off,
+                               const_u64(c, ~PTX_CONST_ADDR_BASE));
+                    if (in->src[0].addr_imm != 0) {
+                        uint32_t adjusted = nid(c);
+                        emit_arith(c, b, S_IAdd, c->t_u64, adjusted, raw,
+                                   const_u64(c,
+                                       (uint64_t)in->src[0].addr_imm));
+                        raw = adjusted;
+                    }
+                    if (in->ty == PTY_U8 || in->ty == PTY_U16 || in->ty == PTY_F16) {
+                        reg_t *dr = find_reg(c, in->dst);
+                        int lw = in->ty == PTY_U8 ? 8 : 16;
+                        int dw = dr ? decl_int_width(dr->decl_ty) : -1;
+                        if (dr && dr->decl_ty == PTY_F16 && lw == 16)
+                            dw = 16;
+                        if (!dr || dw < lw) {
+                            failf(c, line, "narrow const destination must be an "
+                                           "8/16/32/64-bit integer register");
+                            return;
+                        }
+                        uint32_t v = const_bank_load_narrow(c, b, raw, lw);
+                        def_val(c, in->dst, in->ty, v);
+                    } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
+                        if (check_dst(c, in->dst, in->ty, line) != 0)
+                            return;
+                        uint32_t v = const_bank_load_u32(c, b, raw);
+                        if (in->ty == PTY_F32) {
+                            uint32_t cv = nid(c);
+                            put(c, b, (4u << 16) | S_Bitcast);
+                            put(c, b, c->t_f32);
+                            put(c, b, cv);
+                            put(c, b, v);
+                            v = cv;
+                        }
+                        def_val(c, in->dst, in->ty, v);
+                    } else if (in->ty == PTY_U64 || in->ty == PTY_F64) {
+                        if (check_dst(c, in->dst, in->ty, line) != 0)
+                            return;
+                        uint32_t v = const_bank_load_u64(c, b, raw);
+                        if (in->ty == PTY_F64) {
+                            uint32_t cv = nid(c);
+                            put(c, b, (4u << 16) | S_Bitcast);
+                            put(c, b, c->t_f64);
+                            put(c, b, cv);
+                            put(c, b, v);
+                            v = cv;
+                        }
+                        def_val(c, in->dst, in->ty, v);
+                    } else {
+                        failf(c, line,
+                              "dynamic const loads support .b8/.b16/.b32/.b64/.f16/.f32/.f64 only");
+                    }
                     return;
                 }
-                if (ar->decl_ty != PTY_U32 && ar->decl_ty != PTY_U64) {
-                    failf(c, line,
-                          "const address register must be .u32 or .u64");
-                    return;
-                }
-                uint32_t off = ar->cur;
-                if (ar->decl_ty == PTY_U32) {
-                    uint32_t wide = nid(c);
-                    put(c, b, (4u << 16) | S_UConvert);
-                    put(c, b, c->t_u64);
-                    put(c, b, wide);
-                    put(c, b, off);
-                    off = wide;
-                }
-                uint32_t raw = nid(c);
-                emit_arith(c, b, S_And, c->t_u64, raw, off,
-                           const_u64(c, ~PTX_CONST_ADDR_BASE));
-                if (in->src[0].addr_imm != 0) {
-                    uint32_t adjusted = nid(c);
-                    emit_arith(c, b, S_IAdd, c->t_u64, adjusted, raw,
-                               const_u64(c,
-                                   (uint64_t)in->src[0].addr_imm));
-                    raw = adjusted;
-                }
-                if (in->ty == PTY_U8 || in->ty == PTY_U16 || in->ty == PTY_F16) {
-                    reg_t *dr = find_reg(c, in->dst);
-                    int lw = in->ty == PTY_U8 ? 8 : 16;
-                    int dw = dr ? decl_int_width(dr->decl_ty) : -1;
-                    if (dr && dr->decl_ty == PTY_F16 && lw == 16)
-                        dw = 16;
-                    if (!dr || dw < lw) {
-                        failf(c, line, "narrow const destination must be an "
-                                       "8/16/32/64-bit integer register");
-                        return;
-                    }
-                    uint32_t v = const_bank_load_narrow(c, b, raw, lw);
-                    def_val(c, in->dst, in->ty, v);
-                } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
-                    if (check_dst(c, in->dst, in->ty, line) != 0)
-                        return;
-                    uint32_t v = const_bank_load_u32(c, b, raw);
-                    if (in->ty == PTY_F32) {
-                        uint32_t cv = nid(c);
-                        put(c, b, (4u << 16) | S_Bitcast);
-                        put(c, b, c->t_f32);
-                        put(c, b, cv);
-                        put(c, b, v);
-                        v = cv;
-                    }
-                    def_val(c, in->dst, in->ty, v);
-                } else if (in->ty == PTY_U64 || in->ty == PTY_F64) {
-                    if (check_dst(c, in->dst, in->ty, line) != 0)
-                        return;
-                    uint32_t v = const_bank_load_u64(c, b, raw);
-                    if (in->ty == PTY_F64) {
-                        uint32_t cv = nid(c);
-                        put(c, b, (4u << 16) | S_Bitcast);
-                        put(c, b, c->t_f64);
-                        put(c, b, cv);
-                        put(c, b, v);
-                        v = cv;
-                    }
-                    def_val(c, in->dst, in->ty, v);
-                } else {
-                    failf(c, line,
-                          "dynamic const loads support .b8/.b16/.b32/.b64/.f16/.f32/.f64 only");
-                }
-                return;
+                /* Real pointer/BDA address in const space: treat as generic/global load. */
+                goto ld_generic;
             }
             // Initialized module-scope constants materialize as
             // immediates (direct [name]/[name+imm] only; the offset
@@ -726,6 +776,7 @@ void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             def_val(c, in->dst, in->ty, res);
             return;
         }
+    ld_generic:
         if (in->ty != PTY_U32 && in->ty != PTY_F32 && in->ty != PTY_F64 &&
             in->ty != PTY_U64 && in->ty != PTY_U8 && in->ty != PTY_U16 &&
             in->ty != PTY_F16) {
