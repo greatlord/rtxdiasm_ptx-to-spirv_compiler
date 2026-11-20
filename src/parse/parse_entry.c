@@ -635,6 +635,7 @@ int sig_add_reg(parser_t *p, ptx_func_t *fn, const char *name,
         fn->rparams = np;
         fn->rparams_cap = ncap;
     }
+    memset(&fn->rparams[fn->nrparams], 0, sizeof(fn->rparams[fn->nrparams]));
     if (copy_name(fn->rparams[fn->nrparams].name,
                   sizeof(fn->rparams[fn->nrparams].name), name, p,
                   line) != 0)
@@ -863,6 +864,7 @@ int parse_entry(parser_t *p, ptx_unit_t *unit, int is_entry) {
                 fn.params[0].ty = rty;
                 fn.params[0].is_retval = 1;
                 fn.params[0].is_internal = 0;
+                fn.params[0].is_hidden_symbol = 0;
                 fn.params[0].wide_words = rwide;
             } else {
                 if (sig_add_reg(p, &fn, t.text, rty, 1, t.line) != 0)
@@ -1146,6 +1148,7 @@ int parse_entry(parser_t *p, ptx_unit_t *unit, int is_entry) {
                 fn.params = np;
                 fn.params_cap = ncap;
             }
+            memset(&fn.params[fn.nparams], 0, sizeof(fn.params[fn.nparams]));
             if (copy_name(fn.params[fn.nparams].name, sizeof(fn.params[fn.nparams].name), t.text, p, t.line) != 0)
                 return -1;
             fn.params[fn.nparams].ty = ty;
@@ -1155,6 +1158,7 @@ int parse_entry(parser_t *p, ptx_unit_t *unit, int is_entry) {
             fn.params[fn.nparams].is_internal = 0;
             fn.params[fn.nparams].is_tex = is_tex;
             fn.params[fn.nparams].is_hidden_texref = 0;
+            fn.params[fn.nparams].is_hidden_symbol = 0;
             fn.params[fn.nparams].wide_words = wide_words;
             fn.params[fn.nparams].wide_bytes = wide_bytes;
             fn.nparams++;
@@ -2008,6 +2012,117 @@ attrs_done:;
             hp->ty = PTY_U64;
             hp->is_tex = 1;
             hp->is_hidden_texref = 1;
+        }
+    }
+    // Module-scope .global/.const symbols referenced but not defined as parsed
+    // module data in this unit (e.g. .visible declarations skipped by the parser,
+    // or externally managed symbols) become hidden BDA pointer params so kernels
+    // can access driver/runtime-managed device buffers. Symbols already present in
+    // unit->globals/unit->consts are handled by existing compiler mechanisms.
+    for (size_t bi = 0; bi < fn.nblocks; bi++) {
+        ptx_block_t *blk = &fn.blocks[bi];
+        for (size_t ii = 0; ii < blk->count; ii++) {
+            ptx_instr_t *in = &blk->instrs[ii];
+            const char *names[16];
+            int nn = 0;
+            if (in->src[0].kind == OPD_PARAM && in->src[0].param[0])
+                names[nn++] = in->src[0].param;
+            if (in->src[0].kind == OPD_ADDR && !in->src[0].addr_reg[0] && in->src[0].param[0])
+                names[nn++] = in->src[0].param;
+            if (in->src[1].kind == OPD_PARAM && in->src[1].param[0])
+                names[nn++] = in->src[1].param;
+            if (in->src[1].kind == OPD_ADDR && !in->src[1].addr_reg[0] && in->src[1].param[0])
+                names[nn++] = in->src[1].param;
+            for (int ni = 0; ni < nn; ni++) {
+                const char *sym = names[ni];
+                int known_modsym = 0;
+                for (size_t gi = 0; gi < unit->nglobals; gi++)
+                    if (strcmp(unit->globals[gi].name, sym) == 0) { known_modsym = 1; break; }
+                if (!known_modsym) {
+                    for (size_t ci = 0; ci < unit->nconsts; ci++)
+                        if (strcmp(unit->consts[ci].name, sym) == 0) { known_modsym = 1; break; }
+                }
+                /* Parsed module globals/consts use existing codegen paths for
+                 * standalone/self-contained PTX. When compiling from a loaded
+                 * module, symbols may be runtime-managed device buffers (e.g.
+                 * __constant__ vars accessed via cudaMemcpyToSymbol), so inject
+                 * hidden BDA pointer params for module-backed access. */
+                if (known_modsym && !getenv("ACUDA_MODULE_SYMBOLS"))
+                    continue;
+
+                int skip = 0;
+                for (size_t pi = 0; pi < fn.nparams; pi++)
+                    if (strcmp(fn.params[pi].name, sym) == 0) { skip = 1; break; }
+                if (!skip) {
+                    for (size_t li = 0; li < fn.nlocals; li++)
+                        if (strcmp(fn.locals[li].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t li = 0; li < unit->nmodule_locals; li++)
+                        if (strcmp(unit->module_locals[li].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t si = 0; si < unit->nshvars; si++)
+                        if (strcmp(unit->shvars[si].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t ti = 0; ti < unit->ntexrefs; ti++)
+                        if (strcmp(unit->texrefs[ti].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t fi = 0; fi < unit->nfuncs; fi++)
+                        if (strcmp(unit->funcs[fi].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t ei = 0; ei < unit->nextfuncs; ei++)
+                        if (strcmp(unit->extfuncs[ei].name, sym) == 0) { skip = 1; break; }
+                }
+                if (!skip) {
+                    for (size_t si = 0; si < fn.nslots; si++)
+                        if (strcmp(fn.slots[si].name, sym) == 0) { skip = 1; break; }
+                }
+                if (skip)
+                    continue;
+
+                /* Only inject for symbols used in module/global/const contexts, or as
+                 * address-taking of an unresolved module symbol (mov/cvta from symbol
+                 * name). This avoids injecting for shared/local refs in other forms. */
+                int want = 0;
+                if (in->op == POP_LD || in->op == POP_ST || in->op == POP_ATOM || in->op == POP_ATOMCAS ||
+                    in->op == POP_RED_ASYNC || in->op == POP_CPASYNC || in->op == POP_CPASYNC_BULK) {
+                    if (in->space == PSP_GLOBAL || in->space == PSP_CONST)
+                        want = 1;
+                } else if (in->op == POP_MOV || in->op == POP_CVT) {
+                    /* Address-of module symbol (e.g. mov.u64 %rd, sym / cvta forms). */
+                    if (in->src[0].kind == OPD_PARAM && strcmp(in->src[0].param, sym) == 0)
+                        want = 1;
+                } else if (in->src[0].kind == OPD_PARAM && strcmp(in->src[0].param, sym) == 0) {
+                    /* Conservative: other ops taking symbol as param-like operand. */
+                    want = 1;
+                }
+                if (!want)
+                    continue;
+
+                int already = 0;
+                for (size_t pi = 0; pi < fn.nparams; pi++)
+                    if (strcmp(fn.params[pi].name, sym) == 0) { already = 1; break; }
+                if (already)
+                    continue;
+                if (fn.nparams + 1 > fn.params_cap) {
+                    size_t ncap = fn.params_cap ? fn.params_cap * 2 : 4;
+                    void *np = realloc(fn.params, sizeof(*fn.params) * ncap);
+                    if (!np) { perr(p, 0, "out of memory"); return -1; }
+                    fn.params = np; fn.params_cap = ncap;
+                }
+                ptx_param_t *hp = &fn.params[fn.nparams++];
+                memset(hp, 0, sizeof(*hp));
+                strncpy(hp->name, sym, sizeof(hp->name) - 1);
+                strncpy(hp->symbol_name, sym, sizeof(hp->symbol_name) - 1);
+                hp->ty = PTY_U64;
+                hp->is_hidden_symbol = 1;
+                if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                    fprintf(stderr, "ACuda: inject hidden symbol param %s into %s\n", sym, fn.name);
+            }
         }
     }
     latch_guard(&fn);
