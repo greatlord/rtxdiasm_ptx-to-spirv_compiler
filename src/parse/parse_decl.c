@@ -832,21 +832,22 @@ int parse_global_decl(parser_t *p, ptx_unit_t *unit) {
     char name[256];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
-    if (expect_punct(p, '[', "after global name") != 0)
-        return -1;
-    if (next(p, &t) != 0)
-        return -1;
-    if (t.kind != T_INT || t.imm == 0 || t.imm > ((uint64_t)1 << 20)) {
-        perr(p, t.line, "global dimension must be a nonzero size");
-        return -1;
+    uint64_t dim = 1;
+    if (at_punct(p, '[')) {
+        if (next(p, &t) != 0)
+            return -1;
+        if (t.kind != T_INT || t.imm == 0 || t.imm > ((uint64_t)1 << 20)) {
+            perr(p, t.line, "global dimension must be a nonzero size");
+            return -1;
+        }
+        dim = t.imm;
+        if (dim * elem > ((uint64_t)1 << 20)) {
+            perr(p, t.line, "global size insane (max 1MB sanity cap)");
+            return -1;
+        }
+        if (expect_punct(p, ']', "in global dimension") != 0)
+            return -1;
     }
-    uint64_t dim = t.imm;
-    if (dim * elem > ((uint64_t)1 << 20)) {
-        perr(p, t.line, "global size insane (max 1MB sanity cap)");
-        return -1;
-    }
-    if (expect_punct(p, ']', "in global dimension") != 0)
-        return -1;
     uint8_t *bytes = calloc(dim * elem, 1);
     if (!bytes) {
         perr(p, t.line, "out of memory");
