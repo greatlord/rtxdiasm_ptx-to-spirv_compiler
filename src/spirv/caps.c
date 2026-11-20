@@ -99,3 +99,10 @@ void acuda_compiler_set_int64_image(acuda_compiler_caps_t *caps, int available) 
     if (caps) caps->int64_image = available != 0;
 }
 
+void acuda_compiler_set_shader_clock(acuda_compiler_caps_t *caps,
+                                     int device_ok, int subgroup_ok) {
+    if (!caps) return;
+    caps->shader_clock_device = device_ok != 0;
+    caps->shader_clock_subgroup = subgroup_ok != 0;
+}
+

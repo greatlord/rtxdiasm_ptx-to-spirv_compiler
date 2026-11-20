@@ -76,6 +76,8 @@ void emit_head(ctx_t *c) {
         // the device advertises VK_KHR_shader_fma.
         emit1(c, &c->head, S_Capability, C_FmaKHR);
     }
+    if (c->uses_shader_clock)
+        emit1(c, &c->head, S_Capability, C_ShaderClockKHR);
     if (c->use_dot_product) {
         // dp4a uses the packed 4x8-bit integer dot product. Both
         // instructions and capabilities are core in SPIR-V 1.6.
@@ -147,6 +149,12 @@ void emit_head(ctx_t *c) {
         size_t iwords = (strlen(iext) + 1 + 3) / 4;
         put(c, &c->head, (uint32_t)((1 + iwords) << 16) | S_Extension);
         emit_str(c, &c->head, iext);
+    }
+    if (c->uses_shader_clock) {
+        const char *sck = "SPV_KHR_shader_clock";
+        size_t skwords = (strlen(sck) + 1 + 3) / 4;
+        put(c, &c->head, (uint32_t)((1 + skwords) << 16) | S_Extension);
+        emit_str(c, &c->head, sck);
     }
     // GLSL.std.450 extended instruction set (transcendentals): always
     // imported, like glslc does (unused imports validate cleanly).

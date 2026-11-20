@@ -261,6 +261,28 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
     {
         int seen = 0;
         for (size_t bi = 0; bi < fn->nblocks && !seen; bi++)
+            for (size_t ii = 0; ii < fn->blocks[bi].count && !seen; ii++) {
+                const ptx_instr_t *in = &fn->blocks[bi].instrs[ii];
+                for (int si = 0; si < in->nsrc; si++) {
+                    if (in->src[si].kind == OPD_SPECIAL &&
+                        (in->src[si].special == SPC_CLOCK ||
+                         in->src[si].special == SPC_CLOCK64)) {
+                        seen = 1;
+                        break;
+                    }
+                }
+            }
+        ctx->uses_shader_clock = seen;
+    }
+    if (ctx->uses_shader_clock &&
+        !ctx->caps.shader_clock_device && !ctx->caps.shader_clock_subgroup) {
+        fail(ctx, "%clock/%clock64 requires VK_KHR_shader_clock "
+                  "(shaderDeviceClock or shaderSubgroupClock)");
+        goto done;
+    }
+    {
+        int seen = 0;
+        for (size_t bi = 0; bi < fn->nblocks && !seen; bi++)
             for (size_t ii = 0; ii < fn->blocks[bi].count && !seen; ii++)
                 seen = fn->blocks[bi].instrs[ii].op == POP_DP4A ||
                        (fn->blocks[bi].instrs[ii].op == POP_MMA &&

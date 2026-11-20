@@ -46,6 +46,35 @@ void emit_extract(ctx_t *c, spv_blob_t *b, uint32_t id, uint32_t vec,
 
 uint32_t special_comp(ctx_t *c, spv_blob_t *b, ptx_special_t sp,
                              int comp, int line) {
+    if (sp == SPC_CLOCK || sp == SPC_CLOCK64) {
+        c->uses_shader_clock = 1;
+        uint32_t scope = 0;
+        if (c->caps.shader_clock_device)
+            scope = 1; // Device
+        else if (c->caps.shader_clock_subgroup)
+            scope = 3; // Subgroup
+        else {
+            failf(c, line,
+                  "%clock/%clock64 requires VK_KHR_shader_clock "
+                  "(shaderDeviceClock or shaderSubgroupClock)");
+            return 0;
+        }
+        uint32_t c64 = nid(c);
+        put(c, b, (4u << 16) | S_ReadClockKHR);
+        put(c, b, c->t_u64);
+        put(c, b, c64);
+        put(c, b, const_u32(c, scope));
+        if (sp == SPC_CLOCK64)
+            return c64;
+        {
+            uint32_t c32 = nid(c);
+            put(c, b, (4u << 16) | S_UConvert);
+            put(c, b, c->t_u32);
+            put(c, b, c32);
+            put(c, b, c64);
+            return c32;
+        }
+    }
     if (sp == SPC_LANEID || sp == SPC_LANEMASKLT || sp == SPC_LANEMASKLE ||
         sp == SPC_LANEMASKGE || sp == SPC_LANEMASKGT || sp == SPC_LANEMASKEQ) {
         // Lane id within the 32-thread warp + lanes mask. Pure functions
@@ -303,6 +332,22 @@ val_t resolve(ctx_t *c, spv_blob_t *b, const ptx_opd_t *op,
         return v;
     }
     if (op->kind == OPD_SPECIAL) {
+        if (op->special == SPC_CLOCK64) {
+            if (want != PTY_U64) {
+                failf(c, line, "%clock64 requires .u64 destination");
+                return v;
+            }
+            v.id = special_comp(c, b, op->special, op->comp, line);
+            return v;
+        }
+        if (op->special == SPC_CLOCK) {
+            if (want != PTY_U32) {
+                failf(c, line, "%clock requires .u32 destination");
+                return v;
+            }
+            v.id = special_comp(c, b, op->special, op->comp, line);
+            return v;
+        }
         if (want != PTY_U32) {
             failf(c, line, "special registers are .u32");
             return v;

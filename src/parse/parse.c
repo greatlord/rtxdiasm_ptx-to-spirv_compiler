@@ -455,6 +455,18 @@ int parse_operand(parser_t *p, ptx_opd_t *op) {
         op->comp = 0;
         return 0;
     }
+    if (strcmp(t.text, "%clock") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_CLOCK;
+        op->comp = 0;
+        return 0;
+    }
+    if (strcmp(t.text, "%clock64") == 0) {
+        op->kind = OPD_SPECIAL;
+        op->special = SPC_CLOCK64;
+        op->comp = 0;
+        return 0;
+    }
     if (strcmp(t.text, "%tid.x") == 0 || strcmp(t.text, "%tid.y") == 0 ||
         strcmp(t.text, "%tid.z") == 0) {
         op->kind = OPD_SPECIAL;

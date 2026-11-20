@@ -166,6 +166,8 @@ typedef struct acuda_compiler_caps {
     unsigned atomic_float;
     int int64_image;
     int surf_alias_ok; // default 1
+    int shader_clock_device;   // VK_KHR_shader_clock shaderDeviceClock
+    int shader_clock_subgroup; // VK_KHR_shader_clock shaderSubgroupClock
 } acuda_compiler_caps_t;
 
 void acuda_compiler_caps_init(acuda_compiler_caps_t *caps);
@@ -222,6 +224,8 @@ void acuda_compiler_set_atomic_float(acuda_compiler_caps_t *caps,
 unsigned acuda_compiler_get_atomic_float(const acuda_compiler_caps_t *caps);
 void acuda_compiler_set_surface_alias(acuda_compiler_caps_t *caps, int available);
 void acuda_compiler_set_int64_image(acuda_compiler_caps_t *caps, int available);
+void acuda_compiler_set_shader_clock(acuda_compiler_caps_t *caps,
+                                     int device_ok, int subgroup_ok);
 
 void acuda_kernel_free(acuda_kernel_t *kernel);
 acuda_status_t acuda_kernel_info(const acuda_kernel_t *kernel,

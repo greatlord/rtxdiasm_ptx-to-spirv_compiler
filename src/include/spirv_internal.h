@@ -53,6 +53,7 @@ enum {
     S_ImageGather = 96, S_ImageDrefGather = 97, S_Image = 100,
     S_ImageQuerySizeLod = 103, S_ImageQuerySize = 104,
     S_ImageQueryLevels = 106, S_ImageQuerySamples = 107,
+    S_ReadClockKHR = 5056,
     S_FunctionEnd = 56, S_Load = 61, S_Store = 62, S_AccessChain = 65,
     S_PtrAccessChain = 67,
     S_CompositeConstruct = 80, S_CompositeExtract = 81, S_Bitcast = 124,
@@ -113,6 +114,7 @@ enum {
     C_AtomicFloat64AddEXT = 6034, // SPV_EXT_shader_atomic_float_add
     C_AtomicFloat32MinMaxEXT = 5612, // SPV_EXT_shader_atomic_float_min_max
     C_Int64ImageEXT = 5016, // SPV_EXT_shader_image_int64
+    C_ShaderClockKHR = 5055, // SPV_KHR_shader_clock
     C_DotProduct = 6019, C_DotProductInput4x8BitPacked = 6018,
     C_DotProductFloat16AccFloat32VALVE = 6912,
     C_StorageBuffer8BitAccess = 4448, C_StorageBuffer16BitAccess = 4433,
@@ -388,6 +390,7 @@ typedef struct {
     int uses_atomic_f32_add; // OpAtomicFAddEXT on f32 is used
     int uses_atomic_f64_add; // OpAtomicFAddEXT on f64 is used
     int uses_atomic_f32_minmax; // OpAtomicFMin/MaxEXT on f32 is used
+    int uses_shader_clock; // %clock / %clock64 (ShaderClockKHR)
     int shared_f32_view; // shared vars are f32 (scalar-f32 module only)
     int shared_f64_view; // 8-byte shared vars are f64 (scalar-f64 module only)
     uint32_t t_f16, t_v2f16;
