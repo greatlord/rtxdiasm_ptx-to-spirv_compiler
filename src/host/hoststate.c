@@ -667,6 +667,12 @@ static void sm_emit_dyn_mem(ctx_t *c, spv_blob_t *b,
     uint64_t mask = c->host_home_mask[ri] &
                     (0xffffffffull | HM_SHARED | HM_GLVAR | HM_BDA | HM_LOCAL);
     uint32_t pmask = c->host_paddr_mask[ri];
+    if (getenv("ACUDA_DEBUG_SYMBOLS") && in->src[0].addr_reg[0] &&
+        strcmp(in->src[0].addr_reg, "%rd3") == 0 && in->src[0].addr_imm == 12) {
+        fprintf(stderr, "ACuda: dyn mem %s op=%d sp=%d line=%d mask=0x%llx pmask=0x%x dyn=%d aux=%d\n",
+                in->src[0].addr_reg, (int)in->op, (int)in->space, in->line,
+                (unsigned long long)c->host_home_mask[ri], pmask, (int)c->host_dynamic[ri], c->host_home_aux[ri]);
+    }
     uint32_t tags[40];
     int ncases = 0;
     for (int bit = 0; bit < 32; bit++)
@@ -2063,9 +2069,14 @@ int build_host_homes(ctx_t *c, const ptx_func_t *fn, char *err,
                         for (int v = 0; v < c->nfnparams; v++)
                             if (strcmp(c->fnparams[v].name,
                                        in->src[0].param) == 0) {
-                                nm = HM_PADDR;
-                                na = v;
-                                c->host_paddr_mask[ri] |= 1u << (unsigned)v;
+                                if (c->fnparams[v].is_hidden_symbol) {
+                                    nm = HM_BDA;
+                                    na = -1;
+                                } else {
+                                    nm = HM_PADDR;
+                                    na = v;
+                                    c->host_paddr_mask[ri] |= 1u << (unsigned)v;
+                                }
                                 found = 1;
                                 break;
                             }

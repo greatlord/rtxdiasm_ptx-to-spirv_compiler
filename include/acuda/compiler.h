@@ -62,6 +62,10 @@ typedef struct acuda_kernel_info {
     // rather than reading kernelParams.
     uint32_t hidden_texref[ACUDA_MAX_PARAMS];
     char hidden_texref_name[ACUDA_MAX_PARAMS][ACUDA_ENTRY_NAME_MAX];
+    // Module-scope .global/.const symbols injected as hidden pointer params.
+    // The driver/runtime supplies their device buffer addresses by name.
+    uint32_t hidden_symbol[ACUDA_MAX_PARAMS];
+    char hidden_symbol_name[ACUDA_MAX_PARAMS][ACUDA_ENTRY_NAME_MAX];
     // Per descriptor binding (dense pointer order): 0 = storage buffer,
     // 1 = combined image sampler, 3 = standalone sampler.
     uint32_t binding_kind[ACUDA_MAX_PARAMS];

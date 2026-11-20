@@ -1,4 +1,4 @@
-// Module-level emission: capabilities/types/constants, entry point and
+﻿// Module-level emission: capabilities/types/constants, entry point and
 // execution modes, per-function prelude, and the top-level ptx_emit_spv.
 #include <stdio.h>
 #include <stdlib.h>
@@ -455,6 +455,13 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                     param_kinds[di],
                     fn->params[di].is_retval ? " (retval)" : "");
     }
+    if (getenv("ACUDA_DEBUG_SYMBOLS")) {
+        for (size_t di = 0; di < fn->nparams; di++)
+            fprintf(stderr, "ACuda: fnparam[%zu] %s ret=%d hidden=%d kind=%d\n",
+                    di, fn->params[di].name, fn->params[di].is_retval,
+                    fn->params[di].is_hidden_symbol,
+                    (int)param_kinds[di]);
+    }
     for (size_t i = 0; i < fn->nparams; i++) {
         if (fn->params[i].is_retval)
             continue;
@@ -502,10 +509,14 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
             fail(ctx, "param name too long");
             goto done;
         }
+        memset(cp, 0, sizeof(*cp));
         strcpy(cp->name, fn->params[i].name);
         cp->ty = fn->params[i].ty;
         cp->kind = param_kinds[i];
         cp->is_tex = fn->params[i].is_tex;
+        cp->is_hidden_symbol = fn->params[i].is_hidden_symbol;
+        if (getenv("ACUDA_DEBUG_SYMBOLS") && cp->is_hidden_symbol)
+            fprintf(stderr, "ACuda: cparam build hidden %s kind=%d\n", cp->name, cp->kind);
         if (cp->kind == 1) {
             cp->binding = ctx->nbindings++;
             cp->push_word = -1;
@@ -607,6 +618,9 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
         // parameter or a by-value struct even when no direct pointer
         // parameter exists; those addresses are still real device
         // addresses, not descriptor tokens.
+        if (getenv("ACUDA_DEBUG_SYMBOLS"))
+            fprintf(stderr, "ACuda: bda pre fn=%s use_bda=%d n_plain=%d nbind=%d has_byval=%d has_scalar64=%d caps_bda=%d\n",
+                    fn->name ? fn->name : "?", ctx->use_bda, n_plain, ctx->nbindings, has_byval, has_scalar64, ctx->caps.bda);
         if (n_plain == 0 && !has_byval && !has_scalar64 &&
             ctx->nbindings == 0)
             ctx->use_bda = 0;
@@ -628,6 +642,9 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                         strncmp(cp->name, "__acuda_host_", 13) == 0)
                         continue;
                     ctx->bda_word[b] = ctx->npush;
+                    if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                        fprintf(stderr, "ACuda: bda assign bind=%d name=%s word=%u\n",
+                                b, cp->name, ctx->bda_word[b]);
                     ctx->npush += 2;
                     if (meta && nb < ACUDA_MAX_PARAMS)
                         meta->bda_param[nb++] = b;

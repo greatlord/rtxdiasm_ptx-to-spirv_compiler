@@ -775,6 +775,13 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
     for (int i = 0; i < nparams; i++) {
         if (fn->params[i].is_retval)
             continue; // excluded from counting (no arg slot)
+        // Module-scope symbol buffers injected as hidden BDA pointer params
+        // are addressed by symbol name in codegen, not ld.param; treat as
+        // pointer bindings so they get descriptor/BDA plumbing and launch args.
+        if (fn->params[i].is_hidden_symbol) {
+            kinds_out[i] = 1;
+            continue;
+        }
         // Compiler-synthesized host-call buffers are always pointer
         // bindings, even in segments that never read them.
         if (fn->params[i].is_internal || fn->params[i].is_tex) {

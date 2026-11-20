@@ -669,6 +669,8 @@ void def_val(ctx_t *c, const char *dst, ptx_ty_t ty, uint32_t id) {
 }
 
 void def_ptr(ctx_t *c, const char *dst, int binding, uint32_t off) {
+    if (getenv("ACUDA_DEBUG_SYMBOLS") && dst && strcmp(dst, "%rd3") == 0)
+        fprintf(stderr, "ACuda: def_ptr %s bind=%d off=%u\n", dst, binding, off);
     reg_t *r = find_reg(c, dst);
     r->defined = 1;
     r->cur = 0;
@@ -685,6 +687,8 @@ void def_ptr(ctx_t *c, const char *dst, int binding, uint32_t off) {
 
 // Defines dst as the symbolic address of kernel parameter pidx.
 void def_paddr(ctx_t *c, const char *dst, int pidx) {
+    if (getenv("ACUDA_DEBUG_SYMBOLS") && dst && strcmp(dst, "%rd3") == 0)
+        fprintf(stderr, "ACuda: def_paddr %s pidx=%d\n", dst, pidx);
     reg_t *r = find_reg(c, dst);
     r->defined = 1;
     r->cur = 0;

@@ -523,7 +523,7 @@ static void emit_atom_shared64(ctx_t *c, spv_blob_t *b,
 }
 
 void emit_atom(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
-    int line = line;
+    int line = in->line;
     uint32_t id;
         // Atomic read-modify-write; every form returns the OLD value.
         // Scope/semantics follow the space, mirroring the sub-word

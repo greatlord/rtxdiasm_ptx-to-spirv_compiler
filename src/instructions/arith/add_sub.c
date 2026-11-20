@@ -121,6 +121,12 @@ void emit_add_sub_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             for (int s = 0; s < 2; s++) {
                 if (in->src[s].kind == OPD_REG) {
                     reg_t *qr = find_reg(c, in->src[s].reg);
+                    if (getenv("ACUDA_DEBUG_SYMBOLS") && in->dst[0] && strcmp(in->dst, "%rd3") == 0) {
+                        fprintf(stderr, "ACuda: add dbg src%d=%s def=%d ptr=%d bind=%d paddr=%d sh=%d gl=%d off=%u\n",
+                                s, in->src[s].reg, qr?qr->defined:-1, qr?qr->is_ptr:-1,
+                                qr?qr->binding:-99, qr?qr->paddr:-99, qr?qr->shvar:-99, qr?qr->glvar:-99,
+                                qr?qr->off:0u);
+                    }
                     if (qr && qr->defined && qr->is_ptr) {
                         if (qr->paddr >= 0) {
                             failf(c, line,
@@ -131,6 +137,9 @@ void emit_add_sub_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                         pi = s;
                     }
                 }
+            }
+            if (getenv("ACUDA_DEBUG_SYMBOLS") && in->dst[0] && strcmp(in->dst, "%rd3") == 0) {
+                fprintf(stderr, "ACuda: add ptr classify dst=%s nptr=%d pi=%d\n", in->dst, nptr, pi);
             }
             if (nptr > 1) {
                 // Two addresses: PTX u64 add/sub over addresses is plain

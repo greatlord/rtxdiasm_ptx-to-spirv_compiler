@@ -350,6 +350,58 @@ void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 }
                 return;
             }
+            // Hidden module-scope .global/.const symbol: load device-backed
+            // buffer address (BDA pointer param supplied by driver/runtime).
+            {
+                cparam_t *symcp = find_cparam(c, in->src[0].param);
+                if (symcp && symcp->is_hidden_symbol) {
+                    ptx_ty_t dty = (in->ty == PTY_U64) ? PTY_U64 : PTY_U32;
+                    if (check_dst(c, in->dst, dty, line) != 0)
+                        return;
+                    if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                        fprintf(stderr, "ACuda: hidden symbol mov %s -> bind=%d bda=%d bda_word=%d\n",
+                                in->src[0].param, symcp->binding, c->use_bda,
+                                (symcp->binding >= 0) ? c->bda_word[symcp->binding] : -1);
+                    if (c->use_bda && symcp->binding >= 0 && symcp->kind == 1 &&
+                        !symcp->is_tex && strncmp(symcp->name, "__acuda_host_", 13) != 0) {
+                        if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                            fprintf(stderr, "ACuda: hidden symbol mov BDA path %s -> word=%u\n",
+                                    in->src[0].param, (uint32_t)c->bda_word[symcp->binding]);
+                        uint32_t lo = nid(c), hi = nid(c);
+                        emit_push_load(c, b, &lo, PTY_U32,
+                                       (uint32_t)c->bda_word[symcp->binding], line);
+                        emit_push_load(c, b, &hi, PTY_U32,
+                                       (uint32_t)c->bda_word[symcp->binding] + 1, line);
+                        uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c);
+                        put(c, b, (4u << 16) | S_UConvert);
+                        put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                        put(c, b, (4u << 16) | S_UConvert);
+                        put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                        put(c, b, (5u << 16) | S_Shl);
+                        put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64);
+                        put(c, b, const_u64(c, 32));
+                        uint32_t addr = nid(c);
+                        emit_arith(c, b, S_Or, c->t_u64, addr, sh, lo64);
+                        if (dty == PTY_U32) {
+                            def_ptr(c, in->dst, -3, addr);
+                            reg_t *dr = find_reg(c, in->dst);
+                            if (dr) { dr->cur = lo; dr->cur_ty = PTY_U32; }
+                        } else {
+                            def_ptr(c, in->dst, -3, addr);
+                        }
+                        return;
+                    }
+                    if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                        fprintf(stderr, "ACuda: hidden symbol mov DESC fallback %s -> bind=%d\n",
+                                in->src[0].param, symcp->binding);
+                    def_ptr(c, in->dst, symcp->binding, const_u64(c, 0));
+                    return;
+                }
+                if (getenv("ACUDA_DEBUG_SYMBOLS") && symcp) {
+                    fprintf(stderr, "ACuda: cparam %s found but hidden=%d kind=%d bind=%d\n",
+                            in->src[0].param, symcp->is_hidden_symbol, symcp->kind, symcp->binding);
+                }
+            }
             // Symbolic .global image address (mov.u64 %rd, gvar).
             int gv = find_global(c, in->src[0].param);
             if (gv >= 0) {
@@ -410,6 +462,7 @@ void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 int pidx = -1;
                 for (int i = 0; i < c->nfnparams; i++) {
                     if (!c->fnparams[i].is_retval &&
+                        !c->fnparams[i].is_hidden_symbol &&
                         strcmp(c->fnparams[i].name, in->src[0].param) == 0) {
                         pidx = i;
                         break;
@@ -423,6 +476,9 @@ void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                     }
                     if (check_dst(c, in->dst, PTY_U64, line) != 0)
                         return;
+                    if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                        fprintf(stderr, "ACuda: paddr mov %s -> pidx=%d hidden=%d\n",
+                                in->src[0].param, pidx, c->fnparams[pidx].is_hidden_symbol);
                     def_paddr(c, in->dst, pidx);
                     return;
                 }

@@ -237,7 +237,7 @@ static int flow_preds(const ptx_func_t *fn, const cfg_t *cfg, int bi,
 // clean error.
 static void emit_flow_join(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg,
                             int j, const uint32_t *tramp,
-                            uint32_t prev_label) {
+                            uint32_t fallthrough_pred) {
     int plist[256], via_tramp = 0;
     int npl = flow_preds(fn, cfg, j, plist, &via_tramp);
     if (npl < 0) {
@@ -395,10 +395,13 @@ static void emit_flow_join(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg,
             } else {
                 pb = plist[q];
                 edge = c->block_ids[pb];
-                // A block with an inner if/else or prior loop branches
-                // from its last emitted merge label, not its entry label.
-                if (pb == j - 1 && prev_label != 0)
-                    edge = prev_label;
+                // The fallthrough predecessor (j-1) branches from its
+                // flow-emission edge label (block entry or selection
+                // fallthrough), not necessarily the last emitted label
+                // (e.g. an early-return epilogue copy ends at a private
+                // exit block while the false arm comes from the entry).
+                if (pb == j - 1 && fallthrough_pred != 0)
+                    edge = fallthrough_pred;
             }
             const acuda_flow_snap_t *s =
                 &cfg->flow_snap[pb * cfg->flow_nregs + i];
@@ -539,10 +542,10 @@ void emit_flow_block(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg,
                              const uint32_t *exitcopy, uint32_t *flow_cur) {
     int nblocks = (int)fn->nblocks;
     const ptx_block_t *blk = &fn->blocks[bi];
-    uint32_t prev_label = last_emitted_label(&c->fn);
+    uint32_t fallthrough_pred = *flow_cur;
     put(c, &c->fn, (2u << 16) | S_Label);
     put(c, &c->fn, c->block_ids[bi]);
-    emit_flow_join(c, fn, cfg, bi, tramp, prev_label);
+    emit_flow_join(c, fn, cfg, bi, tramp, fallthrough_pred);
     if (c->failed)
         return;
     if (getenv("ACUDA_TRACE")) {
@@ -553,15 +556,13 @@ void emit_flow_block(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg,
         }
     }
     if (cfg->selfloop[bi]) {
-        if (*flow_cur == 0) {
+        if (fallthrough_pred == 0) {
             fail(c, "loop has no preheader block");
             return;
         }
-        // The preheader is the block that actually branches here; a
-        // prior if/else inside the same PTX block ends in a merge label.
-        emit_self_loop(c, fn, bi,
-                       prev_label != 0 ? prev_label : *flow_cur,
-                       tramp[bi]);
+        // The preheader is the block that actually branches here from
+        // the preceding flow block (or its trampoline for a prior loop).
+        emit_self_loop(c, fn, bi, fallthrough_pred, tramp[bi]);
         if (c->failed)
             return;
         put(c, &c->fn, (2u << 16) | S_Label);

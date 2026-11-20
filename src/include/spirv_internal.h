@@ -164,6 +164,7 @@ typedef struct {
     int kind; // 0 = 32-bit scalar (1 push word), 1 = pointer (1 binding),
               // 2 = 64-bit scalar (2 push words)
     int is_tex; // 1 = buffer-backed .texref/.samplerref descriptor
+    int is_hidden_symbol; // module-scope .global/.const hidden BDA pointer param
     int binding;
     int push_word;
     int push_words;

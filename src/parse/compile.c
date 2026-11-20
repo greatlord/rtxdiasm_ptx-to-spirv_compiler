@@ -465,6 +465,11 @@ static acuda_status_t compile_func(const ptx_unit_t *unit,
         if (fn->params[i].is_hidden_texref)
             strncpy(k->info.hidden_texref_name[dense], fn->params[i].name,
                     ACUDA_ENTRY_NAME_MAX - 1);
+        k->info.hidden_symbol[dense] = (uint32_t)fn->params[i].is_hidden_symbol;
+        if (fn->params[i].is_hidden_symbol)
+            strncpy(k->info.hidden_symbol_name[dense],
+                    fn->params[i].symbol_name[0] ? fn->params[i].symbol_name : fn->params[i].name,
+                    ACUDA_ENTRY_NAME_MAX - 1);
         if (fn->params[i].wide_words && kinds[i] == 5) {
             // Pointer words: the first uses the host argument, the
             // rest are continuations at +8, +16, ...
@@ -500,7 +505,7 @@ static acuda_status_t compile_func(const ptx_unit_t *unit,
                     (uint32_t)fn->params[i].wide_words >
                         ACUDA_BYVAL_SSBO_WORDS
                 ? 1u : 0u;
-        k->info.is_ptr[dense] = (uint32_t)kinds[i];
+        k->info.is_ptr[dense] = fn->params[i].is_hidden_symbol ? 1u : (uint32_t)kinds[i];
         {
             // Declared packed stride (what cudart lays out): wide
             // blobs take their exact declared bytes (rounded to the
@@ -520,7 +525,7 @@ static acuda_status_t compile_func(const ptx_unit_t *unit,
 #endif
             }
             uint32_t st = 0;
-            if (fn->params[i].is_hidden_texref) {
+            if (fn->params[i].is_hidden_texref || fn->params[i].is_hidden_symbol) {
                 st = 0;
             } else if (kinds[i] == 5) {
                 st = 0; // continuation inside the head's bytes
@@ -1003,6 +1008,7 @@ acuda_status_t acuda_compile_ptx(const char *ptx_text, const char *entry_name,
         fn = &unit.funcs[0];
     }
 
+
     int host = ptx_hostcall_prepare(&unit, fn, err, sizeof(err));
     if (host < 0) {
         if (errbuf && errlen > 0)
@@ -1011,6 +1017,7 @@ acuda_status_t acuda_compile_ptx(const char *ptx_text, const char *entry_name,
         free(ptx_extracted);
         return ACUDA_ERROR_NOT_SUPPORTED;
     }
+
 
     acuda_kernel_t *k = NULL;
     acuda_status_t st = compile_func(&unit, fn, &k, errbuf, errlen, caps);
