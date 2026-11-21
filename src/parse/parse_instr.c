@@ -3113,38 +3113,45 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
             return -1;
         return block_add_instr(fn, bi, &in, p, opline);
     }
-    if (strcmp(opname, "cvta.to.global.u64") == 0 ||
-        strcmp(opname, "cvta.to.global.u32") == 0) {
-        // Generic-to-global address assertion: pointer copy.  Preserve
-        // target space so 32-bit value->pointer conversion can produce
-        // a global pointer when the source has no tracked lineage.
-        in.op = POP_MOV;
-        in.ty = opname[strlen(opname) - 1] == '2' ? PTY_U32 : PTY_U64;
-        in.space = PSP_GLOBAL;
-        if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
-            return -1;
-        if (expect_comma(p) != 0 || parse_operand(p, &in.src[0]) != 0)
-            return -1;
-        in.nsrc = 1;
-        if (expect_punct(p, ';', "after cvta") != 0)
-            return -1;
-        return block_add_instr(fn, bi, &in, p, opline);
-    }
-    if (strcmp(opname, "cvta.to.shared.u64") == 0 ||
-        strcmp(opname, "cvta.shared.u64") == 0) {
-        // Generic-to-shared address assertion: a pointer copy (the
-        // space is carried by register lineage, checked at use).
-        in.op = POP_MOV;
-        in.ty = PTY_U64;
-        in.space = PSP_SHARED;
-        if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
-            return -1;
-        if (expect_comma(p) != 0 || parse_operand(p, &in.src[0]) != 0)
-            return -1;
-        in.nsrc = 1;
-        if (expect_punct(p, ';', "after cvta") != 0)
-            return -1;
-        return block_add_instr(fn, bi, &in, p, opline);
+    if (strncmp(opname, "cvta.", 5) == 0) {
+        // Convert address between state spaces. Common forms:
+        //   cvta.to.{global,local,shared,const,param,generic}.{u32,u64}
+        //   cvta.{global,local,shared,const,param,generic}.{u32,u64}
+        // Lower as MOV while tracking destination address space for pointer lineage.
+        const char *rest = opname + 5;
+        if (strncmp(rest, "to.", 3) == 0)
+            rest += 3;
+        ptx_space_t cvta_space = PSP_GENERIC;
+        int cvta_ok = 1;
+        ptx_ty_t cvta_ty = PTY_U64;
+        if (strncmp(rest, "global.", 7) == 0) { cvta_space = PSP_GLOBAL; rest += 7; }
+        else if (strncmp(rest, "local.", 6) == 0) { cvta_space = PSP_LOCAL; rest += 6; }
+        else if (strncmp(rest, "shared.", 7) == 0) { cvta_space = PSP_SHARED; rest += 7; }
+        else if (strncmp(rest, "const.", 6) == 0) { cvta_space = PSP_CONST; rest += 6; }
+        else if (strncmp(rest, "param.", 6) == 0) { cvta_space = PSP_PARAM; rest += 6; }
+        else if (strncmp(rest, "generic.", 8) == 0) { cvta_space = PSP_GENERIC; rest += 8; }
+        else { cvta_ok = 0; }
+        if (cvta_ok) {
+            if (strcmp(rest, "u64") == 0) cvta_ty = PTY_U64;
+            else if (strcmp(rest, "u32") == 0) cvta_ty = PTY_U32;
+            else if (strcmp(rest, "s64") == 0) cvta_ty = PTY_U64;
+            else if (strcmp(rest, "s32") == 0) cvta_ty = PTY_U32;
+            else cvta_ok = 0;
+        }
+        if (cvta_ok) {
+            in.op = POP_MOV;
+            in.ty = cvta_ty;
+            in.space = cvta_space;
+            if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
+                return -1;
+            if (expect_comma(p) != 0 || parse_operand(p, &in.src[0]) != 0)
+                return -1;
+            in.nsrc = 1;
+            if (expect_punct(p, ';', "after cvta") != 0)
+                return -1;
+            return block_add_instr(fn, bi, &in, p, opline);
+        }
+        /* fall through to unsupported if form is unrecognized */
     }
     if (strcmp(parts[0], "bar") == 0 && np == 3 &&
         strcmp(parts[1], "warp") == 0 && strcmp(parts[2], "sync") == 0) {
