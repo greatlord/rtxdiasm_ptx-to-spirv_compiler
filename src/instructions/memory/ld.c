@@ -671,7 +671,20 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                             return;
                         }
                         uint32_t v = const_bank_load_narrow(c, b, raw, lw);
-                        def_val(c, in->dst, in->ty, v);
+                        if (in->sign) {
+                            uint32_t t1 = nid(c), t2 = nid(c);
+                            emit_arith(c, b, S_Shl, c->t_u32, t1, v, const_u32(c, (uint32_t)(32 - lw)));
+                            emit_arith(c, b, S_ShrA, c->t_u32, t2, t1, const_u32(c, (uint32_t)(32 - lw)));
+                            v = t2;
+                        }
+                        if (dw == 64) {
+                            uint32_t ext = nid(c);
+                            put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                            put(c, b, c->t_u64); put(c, b, ext); put(c, b, v);
+                            def_val(c, in->dst, dr->decl_ty, ext);
+                        } else {
+                            def_val(c, in->dst, dr->decl_ty, v);
+                        }
                     } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
                         if (check_dst(c, in->dst, in->ty, line) != 0)
                             return;
@@ -756,8 +769,20 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                             }
                             id = narrow_ld_global(c, b, -3, addr, width);
                             if (c->failed) return;
-                            dr->defined = 1; dr->cur = id; dr->is_ptr = 0;
-                            dr->binding = -1; dr->shvar = -1; dr->glvar = -1;
+                            if (in->sign) {
+                                uint32_t t1 = nid(c), t2 = nid(c);
+                                emit_arith(c, b, S_Shl, c->t_u32, t1, id, const_u32(c, (uint32_t)(32 - lw)));
+                                emit_arith(c, b, S_ShrA, c->t_u32, t2, t1, const_u32(c, (uint32_t)(32 - lw)));
+                                id = t2;
+                            }
+                            if (dw == 64) {
+                                uint32_t ext = nid(c);
+                                put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                                put(c, b, c->t_u64); put(c, b, ext); put(c, b, id);
+                                def_val(c, in->dst, dr->decl_ty, ext);
+                            } else {
+                                def_val(c, in->dst, dr->decl_ty, id);
+                            }
                             return;
                         } else if (in->ty == PTY_U64) {
                             id = load_u64(c, b, -3, addr);
@@ -793,7 +818,20 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                             if (!dr || dw < lw) { failf(c, line, "narrow const destination must be an 8/16/32/64-bit integer register"); return; }
                             id = narrow_ld_global(c, b, symcp->binding, offv, width);
                             if (c->failed) return;
-                            dr->defined = 1; dr->cur = id; dr->is_ptr = 0; dr->binding = -1; dr->shvar = -1; dr->glvar = -1;
+                            if (in->sign) {
+                                uint32_t t1 = nid(c), t2 = nid(c);
+                                emit_arith(c, b, S_Shl, c->t_u32, t1, id, const_u32(c, (uint32_t)(32 - lw)));
+                                emit_arith(c, b, S_ShrA, c->t_u32, t2, t1, const_u32(c, (uint32_t)(32 - lw)));
+                                id = t2;
+                            }
+                            if (dw == 64) {
+                                uint32_t ext = nid(c);
+                                put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                                put(c, b, c->t_u64); put(c, b, ext); put(c, b, id);
+                                def_val(c, in->dst, dr->decl_ty, ext);
+                            } else {
+                                def_val(c, in->dst, dr->decl_ty, id);
+                            }
                             return;
                         } else if (in->ty == PTY_U64) {
                             id = load_u64(c, b, symcp->binding, offv);
@@ -846,13 +884,15 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             }
             // Byte/half constants may target a same-or-wider integer
             // register, matching the generic narrow-load rule.
+            reg_t *dr_n = NULL;
+            int lw_n = 0, dw_n = -1;
             if (in->ty == PTY_U8 || in->ty == PTY_U16) {
-                reg_t *dr = find_reg(c, in->dst);
-                int lw = in->ty == PTY_U8 ? 8 : 16;
-                int dw = dr ? decl_int_width(dr->decl_ty) : -1;
-                if (dr && dr->decl_ty == PTY_F16 && lw == 16)
-                    dw = 16;
-                if (!dr || dw < lw) {
+                dr_n = find_reg(c, in->dst);
+                lw_n = in->ty == PTY_U8 ? 8 : 16;
+                dw_n = dr_n ? decl_int_width(dr_n->decl_ty) : -1;
+                if (dr_n && dr_n->decl_ty == PTY_F16 && lw_n == 16)
+                    dw_n = 16;
+                if (!dr_n || dw_n < lw_n) {
                     failf(c, line, "narrow const destination must be an "
                                    "8/16/32/64-bit integer register");
                     return;
@@ -872,7 +912,24 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 res = const_u64(c, val);
             else
                 res = const_u32(c, (uint32_t)val);
-            def_val(c, in->dst, in->ty, res);
+            if ((in->ty == PTY_U8 || in->ty == PTY_U16) && in->sign) {
+                uint32_t t1 = nid(c), t2 = nid(c);
+                emit_arith(c, b, S_Shl, c->t_u32, t1, res,
+                           const_u32(c, (uint32_t)(32 - lw_n)));
+                emit_arith(c, b, S_ShrA, c->t_u32, t2, t1,
+                           const_u32(c, (uint32_t)(32 - lw_n)));
+                res = t2;
+            }
+            if ((in->ty == PTY_U8 || in->ty == PTY_U16) && dw_n == 64) {
+                uint32_t ext = nid(c);
+                put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                put(c, b, c->t_u64);
+                put(c, b, ext);
+                put(c, b, res);
+                def_val(c, in->dst, dr_n->decl_ty, ext);
+                return;
+            }
+            def_val(c, in->dst, (in->ty == PTY_U8 || in->ty == PTY_U16) ? dr_n->decl_ty : in->ty, res);
             return;
         }
     ld_generic:
@@ -1057,12 +1114,27 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             if (c->failed)
                 return;
             reg_t *dr = find_reg(c, in->dst);
-            dr->defined = 1;
-            dr->cur = id;
-            dr->is_ptr = 0;
-            dr->binding = -1;
-            dr->shvar = -1;
-            dr->glvar = -1;
+            if (in->sign) {
+                uint32_t t1 = nid(c), t2 = nid(c);
+                emit_arith(c, b, S_Shl, c->t_u32, t1, id,
+                           const_u32(c, (uint32_t)(32 - width)));
+                emit_arith(c, b, S_ShrA, c->t_u32, t2, t1,
+                           const_u32(c, (uint32_t)(32 - width)));
+                id = t2;
+            }
+            {
+                int dw = dr ? decl_int_width(dr->decl_ty) : -1;
+                if (dw == 64) {
+                    uint32_t ext = nid(c);
+                    put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                    put(c, b, c->t_u64);
+                    put(c, b, ext);
+                    put(c, b, id);
+                    def_val(c, in->dst, dr->decl_ty, ext);
+                } else {
+                    def_val(c, in->dst, dr ? dr->decl_ty : in->ty, id);
+                }
+            }
             return;
         }
         if (use_shared) {
