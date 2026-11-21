@@ -278,6 +278,24 @@ val_t resolve(ctx_t *c, spv_blob_t *b, const ptx_opd_t *op,
             v.id = f;
             return v;
         }
+        if (!ok && want == PTY_U32 && r->decl_ty == PTY_U64) {
+            uint32_t out = nid(c);
+            put(c, b, (4u << 16) | S_UConvert);
+            put(c, b, c->t_u32);
+            put(c, b, out);
+            put(c, b, r->cur);
+            v.id = out;
+            return v;
+        }
+        if (!ok && want == PTY_U64 && r->decl_ty == PTY_U32) {
+            uint32_t out = nid(c);
+            put(c, b, (4u << 16) | S_UConvert);
+            put(c, b, c->t_u64);
+            put(c, b, out);
+            put(c, b, r->cur);
+            v.id = out;
+            return v;
+        }
         // Bitwise moves between same-width integer/float types (e.g. mov.b64
         // between .b64/.u64 and .f64). Bitcast in SPIR-V.
         if (!ok) {
