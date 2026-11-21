@@ -877,7 +877,7 @@ void emit_nested_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
             out_def[idx] = 1;
             if (bi >= Hi && bi <= Li)
                 in_def[idx] = 1;
-            if (pre_ptr[idx] &&
+            if (pre_ptr[idx] && c->regs[idx].paddr >= 0 &&
                 ((in->op == POP_MOV || in->op == POP_ADD) &&
                  in->ty == PTY_U64)) {
                 failf(c, in->line, "loop-carried pointer unsupported "
@@ -1150,8 +1150,14 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
     int nregs = c->nregs;
     size_t nalloc = (size_t)(nregs ? nregs : 1);
     uint32_t *pre_cur = malloc(sizeof(*pre_cur) * nalloc);
+    uint32_t *pre_off = malloc(sizeof(*pre_off) * nalloc);
     char *pre_def = malloc(nalloc);
     char *pre_ptr = malloc(nalloc);
+    int *pre_binding = malloc(sizeof(*pre_binding) * nalloc);
+    int *pre_shvar = malloc(sizeof(*pre_shvar) * nalloc);
+    int *pre_glvar = malloc(sizeof(*pre_glvar) * nalloc);
+    int *pre_paddr = malloc(sizeof(*pre_paddr) * nalloc);
+    int *pre_lovar = malloc(sizeof(*pre_lovar) * nalloc);
     char *def_in = calloc(nalloc, 1);
     size_t *patch_at = malloc(sizeof(*patch_at) * nalloc);
     int *is_carried = malloc(sizeof(*is_carried) * nalloc);
@@ -1163,17 +1169,24 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
     uint32_t *lpred_val = malloc(sizeof(*lpred_val) * (size_t)fn->nblocks *
                                  nalloc);
     int nbrk = 0, nlpred = 0;
-    if (!pre_cur || !pre_def || !pre_ptr || !def_in || !patch_at ||
-        !is_carried || !hdr_cur || !brk_lab || !brk_val || !lpred_lab ||
-        !lpred_val) {
+    if (!pre_cur || !pre_off || !pre_def || !pre_ptr || !pre_binding ||
+        !pre_shvar || !pre_glvar || !pre_paddr || !pre_lovar || !def_in ||
+        !patch_at || !is_carried || !hdr_cur || !brk_lab || !brk_val ||
+        !lpred_lab || !lpred_val) {
         free(hdr_cur);
         free(brk_lab);
         free(brk_val);
         free(lpred_lab);
         free(lpred_val);
         free(pre_cur);
+        free(pre_off);
         free(pre_def);
         free(pre_ptr);
+        free(pre_binding);
+        free(pre_shvar);
+        free(pre_glvar);
+        free(pre_paddr);
+        free(pre_lovar);
         free(def_in);
         free(patch_at);
         free(is_carried);
@@ -1183,7 +1196,13 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
     for (int i = 0; i < nregs; i++) {
         pre_def[i] = c->regs[i].defined ? 1 : 0;
         pre_cur[i] = c->regs[i].cur;
+        pre_off[i] = c->regs[i].off;
         pre_ptr[i] = c->regs[i].is_ptr ? 1 : 0;
+        pre_binding[i] = c->regs[i].binding;
+        pre_shvar[i] = c->regs[i].shvar;
+        pre_glvar[i] = c->regs[i].glvar;
+        pre_paddr[i] = c->regs[i].paddr;
+        pre_lovar[i] = c->regs[i].lovar;
     }
     // Region def scan. Form (a): H minus terminal cbra, bodies H+1..L
     // minus latch bra. Form (b): H minus terminal self-cbra.
@@ -1205,7 +1224,7 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
             if (idx < 0 || idx >= nregs)
                 continue;
             def_in[idx] = 1;
-            if (pre_ptr[idx] &&
+            if (pre_ptr[idx] && c->regs[idx].paddr >= 0 &&
                 ((in->op == POP_MOV || in->op == POP_ADD) &&
                  in->ty == PTY_U64)) {
                 failf(c, in->line, "loop-carried pointer unsupported "
@@ -1232,16 +1251,30 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
         if (!def_in[i] || !pre_def[i])
             continue;
         is_carried[i] = 1;
+        int isptr = pre_ptr[i] ? 1 : 0;
         uint32_t phi = nid(c);
         put(c, &c->fn, (7u << 16) | S_Phi);
-        put(c, &c->fn, ty_of(c, c->regs[i].decl_ty));
+        put(c, &c->fn, isptr ? c->t_u64 : ty_of(c, c->regs[i].decl_ty));
         put(c, &c->fn, phi);
-        put(c, &c->fn, pre_cur[i]);
+        put(c, &c->fn, isptr ? pre_off[i] : pre_cur[i]);
         put(c, &c->fn, pre_label);
         patch_at[i] = c->fn.count;
         put(c, &c->fn, 0); // patched to latch value below
         put(c, &c->fn, cont);
-        c->regs[i].cur = phi;
+        if (isptr) {
+            c->regs[i].defined = 1;
+            c->regs[i].is_ptr = 1;
+            c->regs[i].binding = pre_binding[i];
+            c->regs[i].shvar = pre_shvar[i];
+            c->regs[i].glvar = pre_glvar[i];
+            c->regs[i].paddr = pre_paddr[i];
+            c->regs[i].lovar = pre_lovar[i];
+            c->regs[i].off = phi;
+            c->regs[i].cur = 0;
+            c->regs[i].cur_ty = PTY_U64;
+        } else {
+            c->regs[i].cur = phi;
+        }
         if (c->failed)
             goto out;
     }
@@ -1262,7 +1295,7 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
                 goto out;
         }
         for (int i = 0; i < nregs; i++)
-            hdr_cur[i] = c->regs[i].cur;
+            hdr_cur[i] = pre_ptr[i] ? c->regs[i].off : c->regs[i].cur;
         // Predicate is defined by the just-emitted code; resolve now.
         uint32_t cond = loop_cond(c, &c->fn, cfg);
         if (c->failed)
@@ -1412,7 +1445,7 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
             fail(c, "loop-carried register lost its value");
             goto out;
         }
-        c->fn.words[patch_at[i]] = r->cur;
+        c->fn.words[patch_at[i]] = pre_ptr[i] ? r->off : r->cur;
     }
     // Exit block: merge the header-exit value with every break path.
     if (!cfg->loop_self) {
@@ -1422,10 +1455,11 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
             if (!is_carried[i])
                 continue;
             if (nbrk > 0) {
+                int isptr = pre_ptr[i] ? 1 : 0;
                 uint32_t phi = nid(c);
                 put(c, &c->fn,
                     (uint32_t)((3 + 2 * (1 + nbrk)) << 16) | S_Phi);
-                put(c, &c->fn, ty_of(c, c->regs[i].decl_ty));
+                put(c, &c->fn, isptr ? c->t_u64 : ty_of(c, c->regs[i].decl_ty));
                 put(c, &c->fn, phi);
                 put(c, &c->fn, hdr_cur[i]);
                 put(c, &c->fn, c->block_ids[H]);
@@ -1433,9 +1467,35 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
                     put(c, &c->fn, brk_val[(size_t)k * nalloc + i]);
                     put(c, &c->fn, brk_lab[k]);
                 }
-                c->regs[i].cur = phi;
+                if (isptr) {
+                    c->regs[i].defined = 1;
+                    c->regs[i].is_ptr = 1;
+                    c->regs[i].binding = pre_binding[i];
+                    c->regs[i].shvar = pre_shvar[i];
+                    c->regs[i].glvar = pre_glvar[i];
+                    c->regs[i].paddr = pre_paddr[i];
+                    c->regs[i].lovar = pre_lovar[i];
+                    c->regs[i].off = phi;
+                    c->regs[i].cur = 0;
+                    c->regs[i].cur_ty = PTY_U64;
+                } else {
+                    c->regs[i].cur = phi;
+                }
             } else {
-                c->regs[i].cur = hdr_cur[i];
+                if (pre_ptr[i]) {
+                    c->regs[i].defined = 1;
+                    c->regs[i].is_ptr = 1;
+                    c->regs[i].binding = pre_binding[i];
+                    c->regs[i].shvar = pre_shvar[i];
+                    c->regs[i].glvar = pre_glvar[i];
+                    c->regs[i].paddr = pre_paddr[i];
+                    c->regs[i].lovar = pre_lovar[i];
+                    c->regs[i].off = hdr_cur[i];
+                    c->regs[i].cur = 0;
+                    c->regs[i].cur_ty = PTY_U64;
+                } else {
+                    c->regs[i].cur = hdr_cur[i];
+                }
             }
         }
         const ptx_block_t *mb = &fn->blocks[M];
@@ -1447,8 +1507,14 @@ void emit_loop(ctx_t *c, const ptx_func_t *fn, const cfg_t *cfg) {
     }
 out:
     free(pre_cur);
+    free(pre_off);
     free(pre_def);
     free(pre_ptr);
+    free(pre_binding);
+    free(pre_shvar);
+    free(pre_glvar);
+    free(pre_paddr);
+    free(pre_lovar);
     free(def_in);
     free(patch_at);
     free(is_carried);

@@ -60,24 +60,92 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 // of a parameter (mov.u64 %rd, param). Reads the same
                 // value the direct [param] load would.
                 reg_t *pr = find_reg(c, in->src[0].addr_reg);
-                if (!pr || !pr->defined || !pr->is_ptr ||
-                    pr->paddr < 0) {
+                if (!pr || !pr->defined || !pr->is_ptr) {
                     failf(c, line,
                           "ld.param address must be a parameter address");
                     return;
                 }
-                if (in->src[0].addr_imm != 0) {
-                    char _dbg[320];
-                    snprintf(_dbg, sizeof(_dbg),
-                             "offset into a parameter address unsupported (op=%d sp=%d dst=%s reg=%s paddr=%d imm=%lld pname=%s ty=%d nfn=%d)",
-                             (int)in->op, (int)in->space, in->dst, in->src[0].addr_reg, pr->paddr,
-                             (long long)in->src[0].addr_imm,
-                             (pr->paddr >= 0 && pr->paddr < c->nfnparams) ? c->fnparams[pr->paddr].name : "?",
-                             (int)in->ty, c->nfnparams);
-                    failf(c, line, _dbg);
+                if (pr->paddr >= 0) {
+                    if (in->src[0].addr_imm != 0) {
+                        char _dbg[320];
+                        snprintf(_dbg, sizeof(_dbg),
+                                 "offset into a parameter address unsupported (op=%d sp=%d dst=%s reg=%s paddr=%d imm=%lld pname=%s ty=%d nfn=%d)",
+                                 (int)in->op, (int)in->space, in->dst, in->src[0].addr_reg, pr->paddr,
+                                 (long long)in->src[0].addr_imm,
+                                 (pr->paddr >= 0 && pr->paddr < c->nfnparams) ? c->fnparams[pr->paddr].name : "?",
+                                 (int)in->ty, c->nfnparams);
+                        failf(c, line, _dbg);
+                        return;
+                    }
+                    pname = c->fnparams[pr->paddr].name;
+                } else if (pr->binding >= 0) {
+                    cparam_t *bcp = NULL;
+                    for (int qi = 0; qi < c->ncparams; qi++) {
+                        if (c->cparams[qi].binding == pr->binding && c->cparams[qi].kind == 4) {
+                            bcp = &c->cparams[qi];
+                            break;
+                        }
+                    }
+                    if (!bcp) {
+                        failf(c, line, "ld.param address must be a parameter address");
+                        return;
+                    }
+                    uint32_t byteoff = pr->off;
+                    if (in->src[0].addr_imm != 0) {
+                        uint32_t adj = nid(c);
+                        emit_arith(c, b, S_IAdd, c->t_u64, adj, byteoff,
+                                   const_u64(c, (uint64_t)in->src[0].addr_imm));
+                        byteoff = adj;
+                    }
+                    if (in->ty == PTY_U8 || in->ty == PTY_U16) {
+                        int width = in->ty == PTY_U8 ? 8 : 16;
+                        reg_t *dr = find_reg(c, in->dst);
+                        int lw = width, dw = dr ? decl_int_width(dr->decl_ty) : -1;
+                        if (dr && dr->decl_ty == PTY_F16 && lw == 16) dw = 16;
+                        if (!dr || dw < lw) { failf(c, line, "narrow param destination must be an 8/16/32/64-bit integer register"); return; }
+                        id = narrow_ld_global(c, b, bcp->binding, byteoff, width);
+                        if (c->failed) return;
+                        if (in->sign) {
+                            uint32_t t1 = nid(c), t2 = nid(c);
+                            emit_arith(c, b, S_Shl, c->t_u32, t1, id, const_u32(c, (uint32_t)(32 - lw)));
+                            emit_arith(c, b, S_ShrA, c->t_u32, t2, t1, const_u32(c, (uint32_t)(32 - lw)));
+                            id = t2;
+                        }
+                        if (dw == 64) {
+                            uint32_t ext = nid(c);
+                            put(c, b, (4u << 16) | (in->sign ? S_SConvert : S_UConvert));
+                            put(c, b, c->t_u64); put(c, b, ext); put(c, b, id);
+                            def_val(c, in->dst, dr->decl_ty, ext);
+                        } else {
+                            def_val(c, in->dst, dr->decl_ty, id);
+                        }
+                        return;
+                    } else if (in->ty == PTY_U64) {
+                        id = load_u64(c, b, bcp->binding, byteoff);
+                        def_val(c, in->dst, PTY_U64, id);
+                        return;
+                    } else if (in->ty == PTY_F64) {
+                        uint32_t u = load_u64(c, b, bcp->binding, byteoff);
+                        if (c->emu_f64) id = f64bits_to_f32bits(c, b, u);
+                        else { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f64); put(c,b,id); put(c,b,u); }
+                        def_val(c, in->dst, eff_ty(c, in->ty), id);
+                        return;
+                    } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
+                        uint32_t ptr = addr_ptr(c, b, bcp->binding, byteoff);
+                        uint32_t w = nid(c);
+                        emit_load(c, b, c->t_u32, w, ptr);
+                        if (in->ty == PTY_F32) { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f32); put(c,b,id); put(c,b,w); }
+                        else id = w;
+                        def_val(c, in->dst, in->ty, id);
+                        return;
+                    } else {
+                        failf(c, line, "ld.param supports .b8/.b16/.b32/.b64/.f16/.f32/.f64 only");
+                        return;
+                    }
+                } else {
+                    failf(c, line, "ld.param address must be a parameter address");
                     return;
                 }
-                pname = c->fnparams[pr->paddr].name;
             }
             int64_t poff = in->src[0].addr_imm;
             char partname[300];

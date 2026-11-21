@@ -476,6 +476,11 @@ void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                     }
                     if (check_dst(c, in->dst, PTY_U64, line) != 0)
                         return;
+                    cparam_t *pcp = find_cparam(c, in->src[0].param);
+                    if (pcp && pcp->kind == 4 && pcp->binding >= 0) {
+                        def_ptr(c, in->dst, pcp->binding, const_u64(c, 0));
+                        return;
+                    }
                     if (getenv("ACUDA_DEBUG_SYMBOLS"))
                         fprintf(stderr, "ACuda: paddr mov %s -> pidx=%d hidden=%d\n",
                                 in->src[0].param, pidx, c->fnparams[pidx].is_hidden_symbol);

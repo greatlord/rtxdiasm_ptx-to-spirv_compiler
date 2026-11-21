@@ -60,7 +60,7 @@ static void emit_self_loop(ctx_t *c, const ptx_func_t *fn, int h,
         if (idx < 0 || idx >= nregs)
             continue;
         def_in[idx] = 1;
-        if (pre_ptr[idx] &&
+        if (pre_ptr[idx] && c->regs[idx].paddr >= 0 &&
             ((in->op == POP_MOV || in->op == POP_ADD) && in->ty == PTY_U64)) {
             failf(c, in->line, "loop-carried pointer unsupported "
                                "(recompute addresses from carried indices)");
