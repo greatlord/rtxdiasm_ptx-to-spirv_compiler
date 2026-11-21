@@ -579,6 +579,8 @@ uint32_t host_shared_off_bytes(ctx_t *c, spv_blob_t *b, int var,
                                uint32_t byteoff);
 uint32_t host_global_off_bytes(ctx_t *c, spv_blob_t *b, int var,
                                uint32_t byteoff);
+uint32_t host_local_off_bytes(ctx_t *c, spv_blob_t *b, int var,
+                              uint32_t byteoff);
 uint32_t sh_word_ptr(ctx_t *c, spv_blob_t *b, int var, uint32_t word);
 void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in);
 int block_index_of(ctx_t *c, const ptx_func_t *fn, const char *label);

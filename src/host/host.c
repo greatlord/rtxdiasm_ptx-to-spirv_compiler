@@ -116,6 +116,12 @@ uint32_t host_global_off_bytes(ctx_t *c, spv_blob_t *b, int var,
                         c->host_global_off[var] + byteoff);
 }
 
+uint32_t host_local_off_bytes(ctx_t *c, spv_blob_t *b, int var,
+                              uint32_t byteoff) {
+    return host_mem_off(c, b, 0,
+                        c->host_local_base + c->host_local_off[var] + byteoff);
+}
+
 uint32_t host_shared_off_bytes(ctx_t *c, spv_blob_t *b, int var,
                                uint32_t byteoff) {
     cparam_t *cp = find_cparam(c, "__acuda_host_state");
@@ -189,6 +195,25 @@ void emit_host_request(ctx_t *c, spv_blob_t *b,
                 uint32_t base = host_shared_off_bytes(c, b, pr->shvar, 0);
                 value = nid(c);
                 emit_arith(c, b, S_IAdd, c->t_u64, value, base, pr->off);
+            } else if (pr->lovar >= 0) {
+                cparam_t *cp = find_cparam(c, "__acuda_host_state");
+                if (!cp || cp->binding < 0) {
+                    failf(c, line, "host call local pointer needs host state");
+                    return;
+                }
+                bind_id = const_u32(c, 0xfffffffeu);
+                uint32_t base32 = host_load_u32(c, b, cp->binding, const_u64(c, 0));
+                uint32_t base64 = host_to_u64(c, b, base32);
+                uint32_t idx = host_index(c, b, line);
+                uint32_t field = c->host_local_base + c->host_local_off[pr->lovar];
+                uint32_t loff = host_off(c, b, idx, c->host_state_stride, field);
+                uint32_t addr = nid(c);
+                emit_arith(c, b, S_IAdd, c->t_u64, addr, base64, loff);
+                value = nid(c);
+                emit_arith(c, b, S_IAdd, c->t_u64, value, addr, pr->off);
+            } else if (pr->binding == -3) {
+                bind_id = const_u32(c, 0xffffffffu);
+                value = pr->off;
             } else {
                 failf(c, line,
                       "host call pointer argument must be a global or shared pointer");
@@ -200,13 +225,17 @@ void emit_host_request(ctx_t *c, spv_blob_t *b,
         if (c->failed)
             return;
         if (v.is_ptr) {
-            if (v.binding < 0) {
+            if (v.binding == -3) {
+                bind_id = const_u32(c, 0xffffffffu);
+                value = v.off;
+            } else if (v.binding < 0) {
                 failf(c, line,
                       "host call pointer argument must be a global buffer pointer");
                 return;
+            } else {
+                bind_id = const_u32(c, (uint32_t)v.binding);
+                value = v.off;
             }
-            bind_id = const_u32(c, (uint32_t)v.binding);
-            value = v.off;
         } else if (ty == PTY_F64) {
             value = host_bitcast(c, b, c->t_u64, v.id);
         } else if (ty == PTY_U64) {

@@ -564,6 +564,15 @@ void sh_store_u64(ctx_t *c, spv_blob_t *b, int var, uint32_t off,
 // error (no corpus need); Private memory is per-thread, so stores
 // need no atomic RMW.
 uint32_t lo_addr_ptr(ctx_t *c, spv_blob_t *b, int var, uint32_t off) {
+    if (c->host_machine) {
+        cparam_t *cp = find_cparam(c, "__acuda_host_state");
+        if (!cp || cp->binding < 0)
+            return 0;
+        uint32_t base = host_local_off_bytes(c, b, var, 0);
+        uint32_t abs = nid(c);
+        emit_arith(c, b, S_IAdd, c->t_u64, abs, base, off);
+        return addr_ptr(c, b, cp->binding, abs);
+    }
     uint32_t word = nid(c);
     emit_arith(c, b, S_ShrL, c->t_u64, word, off, const_u64(c, 2));
     uint32_t ptr = nid(c);
@@ -576,6 +585,15 @@ uint32_t lo_addr_ptr(ctx_t *c, spv_blob_t *b, int var, uint32_t off) {
 }
 
 uint32_t lo_load_u64(ctx_t *c, spv_blob_t *b, int var, uint32_t off) {
+    if (c->host_machine) {
+        cparam_t *cp = find_cparam(c, "__acuda_host_state");
+        if (!cp || cp->binding < 0)
+            return const_u64(c, 0);
+        uint32_t base = host_local_off_bytes(c, b, var, 0);
+        uint32_t abs = nid(c);
+        emit_arith(c, b, S_IAdd, c->t_u64, abs, base, off);
+        return load_u64(c, b, cp->binding, abs);
+    }
     uint32_t word = nid(c);
     emit_arith(c, b, S_ShrL, c->t_u64, word, off, const_u64(c, 2));
     uint32_t p0 = nid(c), p1 = nid(c);
@@ -615,6 +633,16 @@ uint32_t lo_load_u64(ctx_t *c, spv_blob_t *b, int var, uint32_t off) {
 
 void lo_store_u64(ctx_t *c, spv_blob_t *b, int var, uint32_t off,
                          uint32_t val) {
+    if (c->host_machine) {
+        cparam_t *cp = find_cparam(c, "__acuda_host_state");
+        if (!cp || cp->binding < 0)
+            return;
+        uint32_t base = host_local_off_bytes(c, b, var, 0);
+        uint32_t abs = nid(c);
+        emit_arith(c, b, S_IAdd, c->t_u64, abs, base, off);
+        store_u64(c, b, cp->binding, abs, val);
+        return;
+    }
     uint32_t word = nid(c);
     emit_arith(c, b, S_ShrL, c->t_u64, word, off, const_u64(c, 2));
     uint32_t p0 = nid(c), p1 = nid(c);
