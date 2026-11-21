@@ -1160,8 +1160,32 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                 if (!e_def && !t_def)
                     continue;
                 if (e_def != t_def) {
-                    fail(ctx, "diamond merges an undefined value");
-                    break;
+                    reg_t *defr = e_def ? re : rt;
+                    int def_is_e = e_def ? 1 : 0;
+                    int e_ptr = defr->is_ptr;
+                    if (e_ptr) {
+                        /* Merging pointers where one path is undefined is risky. */
+                        fail(ctx, "diamond merges an undefined pointer value");
+                        break;
+                    }
+                    uint32_t ty = ty_of(ctx, rr->decl_ty);
+                    uint32_t undef = nid(ctx);
+                    put(ctx, &ctx->types, (3u << 16) | 1); /* OpUndef */
+                    put(ctx, &ctx->types, ty);
+                    put(ctx, &ctx->types, undef);
+                    uint32_t phi = nid(ctx);
+                    put(ctx, &ctx->fn, (7u << 16) | S_Phi);
+                    put(ctx, &ctx->fn, ty);
+                    put(ctx, &ctx->fn, phi);
+                    put(ctx, &ctx->fn, def_is_e ? defr->cur : undef);
+                    put(ctx, &ctx->fn, ctx->block_ids[cfg.e]);
+                    put(ctx, &ctx->fn, def_is_e ? undef : defr->cur);
+                    put(ctx, &ctx->fn, ctx->block_ids[cfg.t]);
+                    rr->cur = phi;
+                    rr->cur_ty = rr->decl_ty;
+                    rr->defined = 1;
+                    rr->is_ptr = 0;
+                    continue;
                 }
                 int e_ptr = re->is_ptr, t_ptr = rt->is_ptr;
                 if (e_ptr != t_ptr ||

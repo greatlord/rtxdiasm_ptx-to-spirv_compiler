@@ -2014,6 +2014,68 @@ attrs_done:;
             hp->is_hidden_texref = 1;
         }
     }
+    // Texture-object u64 params: tex/tld4/txq may use a register holding a
+    // cudaTextureObject_t (plain .param .u64/.b64). Promote such params to
+    // texture descriptor bindings so the SPIR-V emitter/runtime can bind them.
+    for (size_t bi = 0; bi < fn.nblocks; bi++) {
+        ptx_block_t *blk = &fn.blocks[bi];
+        for (size_t ii = 0; ii < blk->count; ii++) {
+            ptx_instr_t *in = &blk->instrs[ii];
+            if (in->op != POP_TEX && in->op != POP_TLD4 &&
+                in->op != POP_TXQ)
+                continue;
+            if (in->tex_ref[0] != '%')
+                continue;
+            const char *reg = in->tex_ref;
+            const char *pname = NULL;
+            for (int step = 0; step < 8 && reg && !pname; step++) {
+                const ptx_instr_t *def = NULL;
+                for (size_t bj = 0; bj < fn.nblocks && !def; bj++) {
+                    const ptx_block_t *b2 = &fn.blocks[bj];
+                    for (size_t ij = 0; ij < b2->count; ij++) {
+                        const ptx_instr_t *di = &b2->instrs[ij];
+                        if (di->dst[0] && strcmp(di->dst, reg) == 0) {
+                            def = di;
+                            break;
+                        }
+                    }
+                }
+                if (!def)
+                    break;
+                if (def->op == POP_LD && def->space == PSP_PARAM &&
+                    def->src[0].kind == OPD_ADDR && !def->src[0].addr_reg[0]) {
+                    pname = def->src[0].param;
+                    break;
+                }
+                if (def->op == POP_MOV && !def->pred[0] && def->nsrc == 1 &&
+                    def->src[0].kind == OPD_REG) {
+                    reg = def->src[0].reg;
+                    continue;
+                }
+                if (def->op == POP_CVT && !def->pred[0] && def->nsrc == 1 &&
+                    def->src[0].kind == OPD_REG) {
+                    reg = def->src[0].reg;
+                    continue;
+                }
+                break;
+            }
+            if (!pname)
+                continue;
+            for (size_t pi = 0; pi < fn.nparams; pi++) {
+                ptx_param_t *pp = &fn.params[pi];
+                if (strcmp(pp->name, pname) != 0)
+                    continue;
+                if (pp->is_tex || pp->is_hidden_texref || pp->is_hidden_symbol ||
+                    pp->is_internal || pp->wide_words)
+                    break;
+                if (pp->ty == PTY_U64) {
+                    pp->is_tex = 1; // texture object handle (.u64/.b64)
+                }
+                break;
+            }
+        }
+    }
+
     // Module-scope .global/.const symbols referenced but not defined as parsed
     // module data in this unit (e.g. .visible declarations skipped by the parser,
     // or externally managed symbols) become hidden BDA pointer params so kernels
