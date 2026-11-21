@@ -897,6 +897,14 @@ void emit_prelude(ctx_t *c) {
         put(c, &c->types, c->bar_var);
         put(c, &c->types, 4); // StorageClass Workgroup
     }
+    c->lockstep_min_var = 0;
+    if (c->uses_state_lockstep_wg) {
+        c->lockstep_min_var = nid(c);
+        put(c, &c->types, (4u << 16) | S_Variable);
+        put(c, &c->types, c->t_ptr_w_u32);
+        put(c, &c->types, c->lockstep_min_var);
+        put(c, &c->types, 4); // StorageClass Workgroup
+    }
     if (c->sh_coop_typed) {
         if (c->sh_coop_comp == 0) {
             if (!c->t_f16) {

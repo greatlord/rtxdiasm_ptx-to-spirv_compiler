@@ -1643,10 +1643,11 @@ void emit_cfg_machine(ctx_t *c, const ptx_func_t *fn) {
     uint32_t entry = nid(c), loop = nid(c), load = nid(c);
     uint32_t dispatch = nid(c), cont = nid(c), merge = nid(c);
     uint32_t done = nid(c);
-    // Lockstep mode: only the lanes holding the subgroup-minimum program
-    // counter execute their block this iteration.  Lanes behind catch up
-    // before any lane advances past the join point, which is what makes
-    // subgroup shuffles/votes see the values their peers will produce.
+    // Lockstep mode: only the lanes holding the minimum program counter
+    // in the selected scope execute their block this iteration.  Lanes
+    // behind catch up before any lane advances past the join point, which
+    // makes subgroup shuffles/votes and workgroup barriers see coherent
+    // progress.  Workgroup-wide barriers require workgroup scope.
     int lockstep = c->uses_state_lockstep;
 
     // Function variables must be declared in the first block.
@@ -1725,19 +1726,66 @@ void emit_cfg_machine(ctx_t *c, const ptx_func_t *fn) {
     put(c, &c->fn, dispatch);
 
     // Dispatch on the block index.  In lockstep mode a lane only runs its
-    // block when it holds the subgroup-minimum PC; the others are sent to
-    // the switch default (the merge block), which loops them back.
+    // block when it holds the minimum PC in the selected scope; the
+    // others are sent to the switch default (the merge block), which
+    // loops them back.
     put(c, &c->fn, (2u << 16) | S_Label);
     put(c, &c->fn, dispatch);
     uint32_t dpc = pc;
     if (lockstep) {
         uint32_t minpc = nid(c);
-        put(c, &c->fn, (6u << 16) | S_GroupUMin);
-        put(c, &c->fn, c->t_u32);
-        put(c, &c->fn, minpc);
-        put(c, &c->fn, const_u32(c, 3)); // Execution scope: Subgroup
-        put(c, &c->fn, 0u);              // GroupOperation: Reduce
-        put(c, &c->fn, pc);
+        if (c->uses_state_lockstep_wg && c->lockstep_min_var) {
+            // Workgroup-wide min-PC reduction: OpGroupNonUniformUMin cannot
+            // take Workgroup scope, so reduce via shared atomicMin with
+            // barriers (all invocations participate every iteration).
+            uint32_t wg = const_u32(c, 2u);     // Workgroup
+            uint32_t sem_acqrel_wg = const_u32(c, 0x108u); // AcqRel|WorkgroupMemory
+            uint32_t sem_relaxed = const_u32(c, 0u);
+            // Reset min for this iteration: lane 0 stores UINT_MAX.
+            uint32_t tid0 = special_comp(c, &c->fn, SPC_TID, 0, 0);
+            uint32_t tid1 = special_comp(c, &c->fn, SPC_TID, 1, 0);
+            uint32_t tid2 = special_comp(c, &c->fn, SPC_TID, 2, 0);
+            uint32_t isx0 = nid(c), isy0 = nid(c), isz0 = nid(c), isxy0 = nid(c), is0 = nid(c);
+            put(c, &c->fn, (5u << 16) | S_IEqual);
+            put(c, &c->fn, c->t_bool); put(c, &c->fn, isx0); put(c, &c->fn, tid0); put(c, &c->fn, const_u32(c, 0));
+            put(c, &c->fn, (5u << 16) | S_IEqual);
+            put(c, &c->fn, c->t_bool); put(c, &c->fn, isy0); put(c, &c->fn, tid1); put(c, &c->fn, const_u32(c, 0));
+            put(c, &c->fn, (5u << 16) | S_IEqual);
+            put(c, &c->fn, c->t_bool); put(c, &c->fn, isz0); put(c, &c->fn, tid2); put(c, &c->fn, const_u32(c, 0));
+            put(c, &c->fn, (5u << 16) | S_LogicalAnd);
+            put(c, &c->fn, c->t_bool); put(c, &c->fn, isxy0); put(c, &c->fn, isx0); put(c, &c->fn, isy0);
+            put(c, &c->fn, (5u << 16) | S_LogicalAnd);
+            put(c, &c->fn, c->t_bool); put(c, &c->fn, is0); put(c, &c->fn, isxy0); put(c, &c->fn, isz0);
+            uint32_t rst_l = nid(c), rst_m = nid(c);
+            put(c, &c->fn, (3u << 16) | S_SelectionMerge);
+            put(c, &c->fn, rst_m); put(c, &c->fn, 0);
+            put(c, &c->fn, (4u << 16) | S_BranchCond);
+            put(c, &c->fn, is0); put(c, &c->fn, rst_l); put(c, &c->fn, rst_m);
+            put(c, &c->fn, (2u << 16) | S_Label); put(c, &c->fn, rst_l);
+            put(c, &c->fn, (3u << 16) | S_Store);
+            put(c, &c->fn, c->lockstep_min_var); put(c, &c->fn, const_u32(c, 0xffffffffu));
+            put(c, &c->fn, (2u << 16) | S_Branch); put(c, &c->fn, rst_m);
+            put(c, &c->fn, (2u << 16) | S_Label); put(c, &c->fn, rst_m);
+            put(c, &c->fn, (4u << 16) | S_ControlBarrier);
+            put(c, &c->fn, wg); put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg);
+            // atomicMin(&lockstep_min_var, pc)
+            uint32_t oldv = nid(c);
+            put(c, &c->fn, (7u << 16) | S_AtomicUMin);
+            put(c, &c->fn, c->t_u32); put(c, &c->fn, oldv);
+            put(c, &c->fn, c->lockstep_min_var);
+            put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg); put(c, &c->fn, pc);
+            put(c, &c->fn, (4u << 16) | S_ControlBarrier);
+            put(c, &c->fn, wg); put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg);
+            minpc = sm_load_var(c, &c->fn, c->t_u32, c->lockstep_min_var);
+        } else {
+            put(c, &c->fn, (6u << 16) | S_GroupUMin);
+            put(c, &c->fn, c->t_u32);
+            put(c, &c->fn, minpc);
+            // Execution scope: Subgroup (3).
+            put(c, &c->fn, const_u32(c, 3u));
+            put(c, &c->fn, 0u);              // GroupOperation: Reduce
+            put(c, &c->fn, pc);
+        }
         uint32_t ismin = nid(c);
         put(c, &c->fn, (5u << 16) | S_IEqual);
         put(c, &c->fn, c->t_bool);
@@ -1874,11 +1922,59 @@ void emit_cfg_machine(ctx_t *c, const ptx_func_t *fn) {
     put(c, &c->fn, done);
     uint32_t pc2 = sm_load_var(c, &c->fn, c->t_u32, c->host_pc_var);
     uint32_t finished = nid(c);
-    put(c, &c->fn, (5u << 16) | S_IEqual);
-    put(c, &c->fn, c->t_bool);
-    put(c, &c->fn, finished);
-    put(c, &c->fn, pc2);
-    put(c, &c->fn, const_u32(c, 0xffffffffu));
+    if (c->uses_state_lockstep_wg && c->lockstep_min_var) {
+        // All invocations must keep participating in the dispatch loop
+        // (and its workgroup barriers) until every invocation is done.
+        // Exit only when the workgroup-wide minimum PC is 0xffffffff.
+        uint32_t wg = const_u32(c, 2u);
+        uint32_t sem_acqrel_wg = const_u32(c, 0x108u);
+        uint32_t sem_relaxed = const_u32(c, 0u);
+        uint32_t tid0 = special_comp(c, &c->fn, SPC_TID, 0, 0);
+        uint32_t tid1 = special_comp(c, &c->fn, SPC_TID, 1, 0);
+        uint32_t tid2 = special_comp(c, &c->fn, SPC_TID, 2, 0);
+        uint32_t ex0 = nid(c), ey0 = nid(c), ez0 = nid(c), exy0 = nid(c), eis0 = nid(c);
+        put(c, &c->fn, (5u << 16) | S_IEqual);
+        put(c, &c->fn, c->t_bool); put(c, &c->fn, ex0); put(c, &c->fn, tid0); put(c, &c->fn, const_u32(c, 0));
+        put(c, &c->fn, (5u << 16) | S_IEqual);
+        put(c, &c->fn, c->t_bool); put(c, &c->fn, ey0); put(c, &c->fn, tid1); put(c, &c->fn, const_u32(c, 0));
+        put(c, &c->fn, (5u << 16) | S_IEqual);
+        put(c, &c->fn, c->t_bool); put(c, &c->fn, ez0); put(c, &c->fn, tid2); put(c, &c->fn, const_u32(c, 0));
+        put(c, &c->fn, (5u << 16) | S_LogicalAnd);
+        put(c, &c->fn, c->t_bool); put(c, &c->fn, exy0); put(c, &c->fn, ex0); put(c, &c->fn, ey0);
+        put(c, &c->fn, (5u << 16) | S_LogicalAnd);
+        put(c, &c->fn, c->t_bool); put(c, &c->fn, eis0); put(c, &c->fn, exy0); put(c, &c->fn, ez0);
+        uint32_t erst_l = nid(c), erst_m = nid(c);
+        put(c, &c->fn, (3u << 16) | S_SelectionMerge);
+        put(c, &c->fn, erst_m); put(c, &c->fn, 0);
+        put(c, &c->fn, (4u << 16) | S_BranchCond);
+        put(c, &c->fn, eis0); put(c, &c->fn, erst_l); put(c, &c->fn, erst_m);
+        put(c, &c->fn, (2u << 16) | S_Label); put(c, &c->fn, erst_l);
+        put(c, &c->fn, (3u << 16) | S_Store);
+        put(c, &c->fn, c->lockstep_min_var); put(c, &c->fn, const_u32(c, 0xffffffffu));
+        put(c, &c->fn, (2u << 16) | S_Branch); put(c, &c->fn, erst_m);
+        put(c, &c->fn, (2u << 16) | S_Label); put(c, &c->fn, erst_m);
+        put(c, &c->fn, (4u << 16) | S_ControlBarrier);
+        put(c, &c->fn, wg); put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg);
+        uint32_t eold = nid(c);
+        put(c, &c->fn, (7u << 16) | S_AtomicUMin);
+        put(c, &c->fn, c->t_u32); put(c, &c->fn, eold);
+        put(c, &c->fn, c->lockstep_min_var);
+        put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg); put(c, &c->fn, pc2);
+        put(c, &c->fn, (4u << 16) | S_ControlBarrier);
+        put(c, &c->fn, wg); put(c, &c->fn, wg); put(c, &c->fn, sem_acqrel_wg);
+        uint32_t minpc2 = sm_load_var(c, &c->fn, c->t_u32, c->lockstep_min_var);
+        put(c, &c->fn, (5u << 16) | S_IEqual);
+        put(c, &c->fn, c->t_bool);
+        put(c, &c->fn, finished);
+        put(c, &c->fn, minpc2);
+        put(c, &c->fn, const_u32(c, 0xffffffffu));
+    } else {
+        put(c, &c->fn, (5u << 16) | S_IEqual);
+        put(c, &c->fn, c->t_bool);
+        put(c, &c->fn, finished);
+        put(c, &c->fn, pc2);
+        put(c, &c->fn, const_u32(c, 0xffffffffu));
+    }
     put(c, &c->fn, (4u << 16) | S_BranchCond);
     put(c, &c->fn, finished);
     put(c, &c->fn, merge);

@@ -382,8 +382,10 @@ typedef struct {
     int uses_f64; // any f64 reg decl or instruction type
     int uses_shfl; // any shfl/match/mma instruction (needs GroupNonUniformShuffle)
     int uses_ballot; // any vote/activemask (needs GroupNonUniformBallot)
-    int uses_state_lockstep; // kind-8 machine dispatches at min PC so
-                             // divergent subgroup lanes reconverge
+    int uses_state_lockstep;    // kind-8 machine dispatches at min PC so
+                                // divergent lanes reconverge
+    int uses_state_lockstep_wg; // when set with lockstep, use workgroup
+                                // scope min-PC (needed for bar.sync/red)
     int uses_barrier; // any workgroup/barrier primitive
     int uses_f16_native; // native Float16 arithmetic is used
     int uses_fdot2;      // OpFDot2MixAcc32VALVE is used
@@ -417,6 +419,7 @@ typedef struct {
     int uses_swbar;    // any counted/arrive barrier (software barrier state)
     int bar_sw_id[17]; // barrier ids that use the software counter (16 = cluster)
     uint32_t bar_var;  // Workgroup u32[16] counter array (software barriers)
+    uint32_t lockstep_min_var; // Workgroup u32 for workgroup-scope min-PC dispatch
     int uses_subid; // any subgroup-lane use (shfl/vote/redux/match)
     reg_t regs[MAX_REGS];
     int nregs;
@@ -820,6 +823,8 @@ uint32_t flush_f32_denorm(ctx_t *c, spv_blob_t *b, uint32_t f, int line);
 uint32_t popc32(ctx_t *c, spv_blob_t *b, uint32_t x);
 uint32_t clz32(ctx_t *c, spv_blob_t *b, uint32_t x, int line);
 uint32_t special_x(ctx_t *c, spv_blob_t *b, ptx_special_t sp, int line);
+uint32_t special_comp(ctx_t *c, spv_blob_t *b, ptx_special_t sp,
+                      int comp, int line);
 uint32_t bda_convert(ctx_t *c, spv_blob_t *b, uint32_t pty, uint32_t addr);
 uint32_t u16_type(ctx_t *c);
 uint32_t phys_u16_ty(ctx_t *c);

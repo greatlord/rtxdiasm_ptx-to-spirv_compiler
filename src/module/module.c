@@ -772,6 +772,8 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
     }
     if (!ctx->host_machine && cfg.kind == 8) {
         ctx->cfg_machine = 1;
+        ctx->uses_state_lockstep = 0;
+        ctx->uses_state_lockstep_wg = 0;
         // Subgroup operations and barriers inside a state machine need
         // reconvergence: a lane that reaches a shuffle/barrier while its
         // peers are still in an earlier block would read stale peer
@@ -787,30 +789,42 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
         // warp's STS before the following LDS.  Independent per-lane
         // scheduling lets a fast lane read the tile before its peers
         // store to it, producing a garbled sort.
+        //
+        // Workgroup-wide barriers (bar.sync, bar.red) require all
+        // invocations in the workgroup to execute the barrier together.
+        // Subgroup-min PC lockstep can deadlock when different
+        // subgroups/lanes must progress independently to reach the same
+        // workgroup barrier, so use workgroup-scope min-PC dispatch for
+        // kernels with workgroup barriers.
         int has_barrier = 0;
+        int has_wg_barrier = 0;
         int has_shared_store = 0;
         for (size_t bi = 0; bi < fn->nblocks; bi++)
             for (size_t ii = 0; ii < fn->blocks[bi].count; ii++) {
                 const ptx_instr_t *ti = &fn->blocks[bi].instrs[ii];
                 if (ti->op == POP_BAR || ti->op == POP_BARRED ||
-                    ti->op == POP_BARWARP)
+                    ti->op == POP_BARWARP) {
                     has_barrier = 1;
-                else if (ti->op == POP_ST && ti->space == PSP_SHARED)
+                    if (ti->op != POP_BARWARP)
+                        has_wg_barrier = 1;
+                } else if (ti->op == POP_ST && ti->space == PSP_SHARED) {
                     has_shared_store = 1;
+                }
             }
-        if (ctx->uses_subid || has_shared_store) {
+        if (has_wg_barrier) {
+            ctx->uses_state_lockstep = 1;
+            ctx->uses_state_lockstep_wg = 1;
+        } else if (ctx->uses_subid || has_shared_store) {
             // Subgroup ops and warp-synchronous shared-store patterns
             // (notably cuDNN implicit-GEMM tiles and cub's WarpMergeSort)
             // rely on converged progress: peer lanes must execute their
-            // stores before a lane's dependent load.  Keep lockstep even
-            // when the kernel also has block barriers.
+            // stores before a lane's dependent load.
             ctx->uses_state_lockstep = 1;
         } else if (has_barrier) {
-            // Pure barrier kernels in divergent CFG state machines can
-            // deadlock under subgroup-min PC lockstep when lanes must make
-            // independent progress to reach the same barrier instance.
-            // Dispatch lanes by their own PC and rely on the barrier for
-            // synchronization/visibility.
+            // Pure subgroup-barrier kernels without shared-store/subgroup
+            // dependencies can deadlock under min-PC lockstep in some
+            // divergent CFGs; dispatch lanes by their own PC and rely on
+            // barriers for synchronization/visibility.
             ctx->uses_state_lockstep = 0;
         }
 
