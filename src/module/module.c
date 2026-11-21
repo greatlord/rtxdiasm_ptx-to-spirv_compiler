@@ -812,8 +812,13 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                 }
             }
         if (has_wg_barrier) {
+            // Workgroup barriers require workgroup-scope participation, but
+            // the workgroup-scope min-PC reduction currently miscompiles
+            // some loop/unroll CFGs (e.g. shfl_scan vertical scan).  Fall
+            // back to subgroup lockstep until the WG lockstep reduction is
+            // fixed.  This restores the pre-b2dc620 behavior for wg barriers.
             ctx->uses_state_lockstep = 1;
-            ctx->uses_state_lockstep_wg = 1;
+            ctx->uses_state_lockstep_wg = 0;
         } else if (ctx->uses_subid || has_shared_store) {
             // Subgroup ops and warp-synchronous shared-store patterns
             // (notably cuDNN implicit-GEMM tiles and cub's WarpMergeSort)
