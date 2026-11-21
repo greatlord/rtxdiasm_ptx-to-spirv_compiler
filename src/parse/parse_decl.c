@@ -626,6 +626,13 @@ int parse_const_decl(parser_t *p, ptx_unit_t *unit) {
         if (at_punct(p, '{'))
             braced = 1;
     }
+    /* Module compiles with runtime-managed symbols must treat uninitialized
+     * module-scope .const declarations as device-backed symbols (e.g.
+     * __constant__ accessed via cudaMemcpyToSymbol/cuModuleGetGlobal), not
+     * as compile-time immediates.  Hidden-symbol injection in parse_entry
+     * handles the runtime binding when the symbol is not in unit->consts. */
+    if (no_init && getenv("ACUDA_MODULE_SYMBOLS"))
+        return 0;
     // Zero-fill matches ptxas: fewer initializer lanes than the
     // declared dimension leave the tail zeroed (ZLUDA const_ident).
     uint8_t *bytes = calloc(dim, elem);

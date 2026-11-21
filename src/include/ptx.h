@@ -253,9 +253,9 @@ typedef struct {
     ptx_opd_t src[8]; // bfi takes 4
     ptx_opd_t *call_args; // POP_CALL/REQUEST: dynamically sized argument list
     int nsrc;
-    char target[64]; // branch label; call callee name for POP_CALL
-    char target_list[64]; // POP_CALL flist/fproto or POP_BRX tlist
-    char call_cand[8][128]; // indirect dispatch: candidate callees
+    char target[256]; // branch label; call callee name for POP_CALL
+    char target_list[256]; // POP_CALL flist/fproto or POP_BRX tlist
+    char call_cand[8][256]; // indirect dispatch: candidate callees
     int ncall_cand;
     int dead; // front-end scratch: drop after a peephole rewrite
     char rets[4][64]; // POP_CALL return slot/reg names

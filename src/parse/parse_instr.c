@@ -1174,7 +1174,7 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                                     : NULL;
             if (vd && vd->n == 2 && vd->elem == PTY_U16 &&
                 strcmp(parts[1], "b32") == 0) {
-                char base[64];
+                char base[256];
                 if (copy_name(base, sizeof(base), t0.text, p, t0.line) != 0)
                     return -1;
                 if (expect_comma(p) != 0 ||
@@ -1188,12 +1188,12 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                 if (expect_punct(p, ';', "after vector mov") != 0)
                     return -1;
                 size_t lb = strlen(base);
-                if (lb + 2 >= 64) {
+                if (lb + 2 >= sizeof(base)) {
                     perr(p, opline, "name too long");
                     return -1;
                 }
                 for (int i = 0; i < 2; i++) {
-                    char comp[64];
+                    char comp[256];
                     memcpy(comp, base, lb);
                     comp[lb] = '_';
                     comp[lb + 1] = "xyzw"[i];

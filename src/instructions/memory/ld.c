@@ -716,6 +716,105 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
             }
             int ci = find_const(c, in->src[0].param);
             if (ci < 0) {
+                /* Runtime-backed module-scope .const symbol (hidden BDA param). */
+                cparam_t *symcp = find_cparam(c, in->src[0].param);
+                if (symcp && symcp->is_hidden_symbol && symcp->binding >= 0) {
+                    int64_t imm_off = in->src[0].addr_imm;
+                    if (c->use_bda && symcp->kind == 1 && !symcp->is_tex &&
+                        strncmp(symcp->name, "__acuda_host_", 13) != 0) {
+                        uint32_t lo = nid(c), hi = nid(c);
+                        emit_push_load(c, b, &lo, PTY_U32,
+                                       (uint32_t)c->bda_word[symcp->binding], line);
+                        emit_push_load(c, b, &hi, PTY_U32,
+                                       (uint32_t)c->bda_word[symcp->binding] + 1, line);
+                        uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c), addr = nid(c);
+                        put(c, b, (4u << 16) | S_UConvert);
+                        put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                        put(c, b, (4u << 16) | S_UConvert);
+                        put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                        put(c, b, (5u << 16) | S_Shl);
+                        put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64);
+                        put(c, b, const_u64(c, 32));
+                        emit_arith(c, b, S_Or, c->t_u64, addr, sh, lo64);
+                        if (imm_off != 0) {
+                            uint32_t a2 = nid(c);
+                            emit_arith(c, b, S_IAdd, c->t_u64, a2, addr,
+                                       const_u64(c, (uint64_t)imm_off));
+                            addr = a2;
+                        }
+                        /* Load via BDA physical pointer (binding -3). */
+                        if (in->ty == PTY_U8 || in->ty == PTY_U16) {
+                            int width = in->ty == PTY_U8 ? 8 : 16;
+                            reg_t *dr = find_reg(c, in->dst);
+                            int lw = width;
+                            int dw = dr ? decl_int_width(dr->decl_ty) : -1;
+                            if (dr && dr->decl_ty == PTY_F16 && lw == 16)
+                                dw = 16;
+                            if (!dr || dw < lw) {
+                                failf(c, line, "narrow const destination must be an 8/16/32/64-bit integer register");
+                                return;
+                            }
+                            id = narrow_ld_global(c, b, -3, addr, width);
+                            if (c->failed) return;
+                            dr->defined = 1; dr->cur = id; dr->is_ptr = 0;
+                            dr->binding = -1; dr->shvar = -1; dr->glvar = -1;
+                            return;
+                        } else if (in->ty == PTY_U64) {
+                            id = load_u64(c, b, -3, addr);
+                            def_val(c, in->dst, PTY_U64, id);
+                            return;
+                        } else if (in->ty == PTY_F64) {
+                            uint32_t u = load_u64(c, b, -3, addr);
+                            if (c->emu_f64) id = f64bits_to_f32bits(c, b, u);
+                            else { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f64); put(c,b,id); put(c,b,u); }
+                            def_val(c, in->dst, eff_ty(c, in->ty), id);
+                            return;
+                        } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
+                            uint32_t ptr = addr_ptr(c, b, -3, addr);
+                            uint32_t w = nid(c);
+                            emit_load(c, b, c->t_u32, w, ptr);
+                            if (in->ty == PTY_F32) { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f32); put(c,b,id); put(c,b,w); }
+                            else id = w;
+                            def_val(c, in->dst, in->ty, id);
+                            return;
+                        } else {
+                            failf(c, line, "const loads support .b8/.b16/.b32/.b64/.f16/.f32/.f64 only");
+                            return;
+                        }
+                    }
+                    /* Descriptor-backed hidden symbol: load from binding at offset. */
+                    {
+                        uint32_t offv = const_u64(c, (uint64_t)imm_off);
+                        if (in->ty == PTY_U8 || in->ty == PTY_U16) {
+                            int width = in->ty == PTY_U8 ? 8 : 16;
+                            reg_t *dr = find_reg(c, in->dst);
+                            int lw = width, dw = dr ? decl_int_width(dr->decl_ty) : -1;
+                            if (dr && dr->decl_ty == PTY_F16 && lw == 16) dw = 16;
+                            if (!dr || dw < lw) { failf(c, line, "narrow const destination must be an 8/16/32/64-bit integer register"); return; }
+                            id = narrow_ld_global(c, b, symcp->binding, offv, width);
+                            if (c->failed) return;
+                            dr->defined = 1; dr->cur = id; dr->is_ptr = 0; dr->binding = -1; dr->shvar = -1; dr->glvar = -1;
+                            return;
+                        } else if (in->ty == PTY_U64) {
+                            id = load_u64(c, b, symcp->binding, offv);
+                            def_val(c, in->dst, PTY_U64, id); return;
+                        } else if (in->ty == PTY_F64) {
+                            uint32_t u = load_u64(c, b, symcp->binding, offv);
+                            if (c->emu_f64) id = f64bits_to_f32bits(c, b, u);
+                            else { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f64); put(c,b,id); put(c,b,u); }
+                            def_val(c, in->dst, eff_ty(c, in->ty), id); return;
+                        } else if (in->ty == PTY_U32 || in->ty == PTY_F32) {
+                            uint32_t ptr = addr_ptr(c, b, symcp->binding, offv);
+                            uint32_t w = nid(c);
+                            emit_load(c, b, c->t_u32, w, ptr);
+                            if (in->ty == PTY_F32) { id = nid(c); put(c,b,(4u<<16)|S_Bitcast); put(c,b,c->t_f32); put(c,b,id); put(c,b,w); }
+                            else id = w;
+                            def_val(c, in->dst, in->ty, id); return;
+                        } else {
+                            failf(c, line, "const loads support .b8/.b16/.b32/.b64/.f16/.f32/.f64 only"); return;
+                        }
+                    }
+                }
                 failf(c, line, "unknown .const variable");
                 return;
             }
