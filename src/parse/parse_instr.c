@@ -3155,17 +3155,13 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
     }
     if (strcmp(parts[0], "bar") == 0 && np == 3 &&
         strcmp(parts[1], "warp") == 0 && strcmp(parts[2], "sync") == 0) {
-        // bar.warp.sync membermask. Only the full-warp mask is lowered
-        // (subgroup barrier); partial masks would need per-lane control.
-        ptx_tok_t mt;
-        if (next(p, &mt) != 0)
+        // bar.warp.sync membermask. Full-warp masks lower to a subgroup
+        // barrier; partial/dynamic masks are accepted and conservatively
+        // lowered as a subgroup barrier (best-effort for active-mask patterns).
+        if (parse_operand(p, &in.src[0]) != 0)
             return -1;
-        if (mt.kind != T_INT || mt.imm != 0xffffffffu) {
-            perr(p, opline, "bar.warp.sync supports only the full membermask 0xffffffff");
-            return -1;
-        }
         in.op = POP_BARWARP;
-        in.nsrc = 0;
+        in.nsrc = 1;
         if (expect_punct(p, ';', "after bar.warp.sync") != 0)
             return -1;
         return block_add_instr(fn, bi, &in, p, opline);
@@ -4310,20 +4306,27 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
         return block_add_instr(fn, bi, &in, p, opline);
     }
     if (strcmp(parts[0], "cvt") == 0 && np == 4 && strcmp(parts[1], "sat") == 0) {
-        // Saturating integer conversion: clamp the source to the
-        // destination's range, then narrow.
-        ptx_ty_t dt, st;
+        // Saturating conversion: integer clamp/narrow, or float clamp to [0,1].
+        ptx_ty_t dt = PTY_U32, st = PTY_U32;
         int dsign = 0, ssign = 0;
-        if (cvt_int_ty(parts[2], &dt, &dsign) != 0 ||
-            cvt_int_ty(parts[3], &st, &ssign) != 0) {
-            perr(p, opline, "cvt.sat needs integer source/destination types");
+        int is_int = (cvt_int_ty(parts[2], &dt, &dsign) == 0 &&
+                      cvt_int_ty(parts[3], &st, &ssign) == 0);
+        int is_f32 = (strcmp(parts[2], "f32") == 0 && strcmp(parts[3], "f32") == 0);
+        int is_f64 = (strcmp(parts[2], "f64") == 0 && strcmp(parts[3], "f64") == 0);
+        if (!is_int && !is_f32 && !is_f64) {
+            perr(p, opline, "cvt.sat needs integer, f32.f32, or f64.f64 types");
             return -1;
         }
         in.op = POP_CVT;
-        in.ty = dt;
-        in.ty2 = st;
-        in.sign = ssign;
-        in.dsign = dsign;
+        if (is_int) {
+            in.ty = dt;
+            in.ty2 = st;
+            in.sign = ssign;
+            in.dsign = dsign;
+        } else {
+            in.ty = is_f64 ? PTY_F64 : PTY_F32;
+            in.ty2 = in.ty;
+        }
         in.sat = 1;
         if (parse_dst(p, in.dst, sizeof(in.dst), 0) != 0)
             return -1;
