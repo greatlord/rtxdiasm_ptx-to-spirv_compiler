@@ -1112,7 +1112,7 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
     }
 
     reg_t *d7h = NULL, *d7e = NULL, *d7t = NULL;
-    if (cfg.kind == 7 && ctx->nregs > 0) {
+    if ((cfg.kind == 7 || cfg.kind == 2) && ctx->nregs > 0) {
         size_t rb = sizeof(reg_t) * (size_t)ctx->nregs;
         d7h = malloc(rb);
         d7e = malloc(rb);
@@ -1152,7 +1152,7 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
         }
         put(ctx, &ctx->fn, (2u << 16) | S_Label);
         put(ctx, &ctx->fn, ctx->block_ids[bi]);
-        if (cfg.kind == 7 && (int)bi == cfg.J && d7e && d7t && d7h) {
+        if ((cfg.kind == 7 || cfg.kind == 2) && (int)bi == cfg.J && d7e && d7t && d7h) {
             for (int ri = 0; ri < (int)fn->nregs; ri++) {
                 reg_t *re = &d7e[ri], *rt = &d7t[ri];
                 reg_t *rh = &d7h[ri], *rr = &ctx->regs[ri];
@@ -1281,7 +1281,7 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                 thenb = ctx->block_ids[cfg.t];
                 elseb = cfg.e == cfg.J ? merge : ctx->block_ids[cfg.e];
             }
-            if (cfg.kind == 7 && d7h) {
+            if ((cfg.kind == 7 || cfg.kind == 2) && d7h) {
                 // Default both arm snapshots to the branch-header state;
                 // an arm that does not redefine a register keeps it.
                 memcpy(d7h, ctx->regs, sizeof(reg_t) * (size_t)ctx->nregs);
@@ -1334,7 +1334,10 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
             // Only branch-to-next survives analysis, except the diamond
             // then-block which jumps to the join.
             emit_block_body(ctx, &ctx->fn, blk, 1);
-            if (cfg.kind == 2 && (int)bi == cfg.t) {
+            if ((cfg.kind == 7 || cfg.kind == 2) && (int)bi == cfg.t) {
+                if (d7t)
+                    memcpy(d7t, ctx->regs,
+                           sizeof(reg_t) * (size_t)ctx->nregs);
                 emit_branch(ctx, &ctx->fn, ctx->block_ids[cfg.J]);
                 continue;
             }
@@ -1345,12 +1348,9 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                 emit_branch(ctx, &ctx->fn, ctx->block_ids[cfg.J]);
                 continue;
             }
-            if (cfg.kind == 7 && (int)bi == cfg.t) {
-                if (d7t)
-                    memcpy(d7t, ctx->regs,
-                           sizeof(reg_t) * (size_t)ctx->nregs);
-                emit_branch(ctx, &ctx->fn, ctx->block_ids[cfg.J]);
-                continue;
+            if ((int)bi + 1 == cfg.J && (cfg.kind == 2) && d7e) {
+                memcpy(d7e, ctx->regs,
+                       sizeof(reg_t) * (size_t)ctx->nregs);
             }
             if (bi + 1 < fn->nblocks)
                 emit_branch(ctx, &ctx->fn, ctx->block_ids[bi + 1]);
@@ -1367,6 +1367,8 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
         emit_block_body(ctx, &ctx->fn, blk, 0);
         if (cfg.kind == 7 && (int)bi == cfg.t && d7t)
             memcpy(d7t, ctx->regs, sizeof(reg_t) * (size_t)ctx->nregs);
+        if (cfg.kind == 2 && (int)bi + 1 == cfg.J && d7e)
+            memcpy(d7e, ctx->regs, sizeof(reg_t) * (size_t)ctx->nregs);
         if (bi + 1 < fn->nblocks)
             emit_branch(ctx, &ctx->fn, ctx->block_ids[bi + 1]);
         else {
