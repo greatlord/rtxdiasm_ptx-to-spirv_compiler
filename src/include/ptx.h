@@ -119,7 +119,7 @@ typedef struct {
     char imm_text[128];
     ptx_special_t special; // OPD_SPECIAL
     int comp;              // vector component 0..2 (x/y/z)
-    char param[256];       // OPD_PARAM / OPD_ADDR base param name
+    char param[512];       // OPD_PARAM / OPD_ADDR base param name
     char addr_reg[64];     // OPD_ADDR address register
     int64_t addr_imm;      // OPD_ADDR constant byte offset
     uint64_t regoff_imm;   // OPD_REGOFF constant added to reg[]
@@ -286,32 +286,32 @@ typedef struct {
 } ptx_block_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     ptx_ty_t ty;
 } ptx_regdecl_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     int n;          // 2/4 components
     ptx_ty_t elem;  // U32/U16/U8 element type
 } ptx_vecdecl_t; // vector register (scalarized to name_x/_y/... at parse)
 
 typedef struct {
-    char name[256];
+    char name[512];
     ptx_ty_t ty;
     int is_retval; // .func return slot (writes dropped, see st.param)
     int is_internal; // compiler-synthesized host-call state/request param
     int is_tex;      // .param .texref/.samplerref (buffer-backed descriptor)
     int is_hidden_texref; // module-scope .texref injected as a hidden param
     int is_hidden_symbol; // module-scope .global/.const injected as hidden BDA pointer param
-    char symbol_name[256]; // referenced module symbol name (for hidden symbol params)
+    char symbol_name[512]; // referenced module symbol name (for hidden symbol params)
     int wide_words;  // .param .u64xN: N-word by-value argument (0 = no)
     int wide_bytes;  // exact client byte size of a wide by-value blob
                      // (.b8[M] -> M, .u64xN -> N*8; 0 = not a blob)
 } ptx_param_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     size_t elem;  // declared element size in bytes (1/2/4/8)
     size_t bytes; // total allocation, = dim * elemsize (0 = extern dynamic)
     int align;    // recorded .align (each var gets its own allocation,
@@ -326,7 +326,7 @@ typedef struct {
 } ptx_sym_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     size_t elem;    // element bytes (1/2/4/8)
     size_t nbytes;  // dim * elem
     size_t bank_off; // byte offset in the flattened dynamic .const image
@@ -339,7 +339,7 @@ typedef struct {
 } ptx_const_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     ptx_ty_t ty;
     size_t bytes; // array size in bytes (scalar slots: element size)
     int align;
@@ -347,7 +347,7 @@ typedef struct {
 } ptx_paramslot_t; // in-function `.param` cell (call argument/return slot)
 
 typedef struct {
-    char name[256];
+    char name[512];
     size_t ret_bytes;
     size_t arg_bytes;
     int nargs;
@@ -356,7 +356,7 @@ typedef struct {
 } ptx_extfunc_t; // top-level `.extern .func` declaration
 
 typedef struct {
-    char name[256];
+    char name[512];
     int is_entry; // .entry (launchable) vs .func (call-only unless solo)
     ptx_param_t *params;    size_t nparams, params_cap;
     ptx_regdecl_t *regs;
@@ -393,7 +393,7 @@ typedef struct {
 } ptx_func_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
 } ptx_texref_t;
 
 typedef struct {

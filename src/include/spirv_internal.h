@@ -162,7 +162,7 @@ typedef struct {
 } reg_t;
 
 typedef struct {
-    char name[256];
+    char name[512];
     int kind; // 0 = 32-bit scalar (1 push word), 1 = pointer (1 binding),
               // 2 = 64-bit scalar (2 push words)
     int is_tex; // 1 = buffer-backed .texref/.samplerref descriptor

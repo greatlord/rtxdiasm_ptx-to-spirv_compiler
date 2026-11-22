@@ -714,7 +714,7 @@ int parse_reg_decl(parser_t *p, ptx_func_t *fn, const char *decltok,
                 perr(p, t.line, "expected register name in .reg");
                 return -1;
             }
-            char base[256];
+            char base[512];
             if (copy_name(base, sizeof(base), t.text, p, t.line) != 0)
                 return -1;
             if (strlen(base) > 240) {
@@ -775,7 +775,7 @@ int parse_reg_decl(parser_t *p, ptx_func_t *fn, const char *decltok,
                 return -1;
             }
             for (int i = 0; i < vn; i++) {
-                char nm[256];
+                char nm[512];
                 size_t lb = strlen(base);
                 memcpy(nm, base, lb);
                 nm[lb] = '_';
@@ -817,7 +817,7 @@ int parse_reg_decl(parser_t *p, ptx_func_t *fn, const char *decltok,
         }
         // %r<4> range form arrives as separate tokens ('<' is not an
         // ident char): IDENT "%r", '<', INT, '>'. Single names arrive whole.
-        char base[256];
+        char base[512];
         int lo = -1, hi = -1;
         if (copy_name(base, sizeof(base), t.text, p, t.line) != 0)
             return -1;
@@ -846,7 +846,7 @@ int parse_reg_decl(parser_t *p, ptx_func_t *fn, const char *decltok,
                 return -1;
         } else {
             for (int i = lo; i < hi; i++) {
-                char nm[256];
+                char nm[512];
                 snprintf(nm, sizeof(nm), "%.*s%d", 240, base, i);
                 if (declare_scalar_reg(p, fn, nm, ty, t.line) != 0)
                     return -1;

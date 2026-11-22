@@ -90,7 +90,7 @@ int parse_shared_decl(parser_t *p, ptx_unit_t *unit) {
         perr(p, t.line, "expected shared variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     // Scalar form (no brackets) declares a single element.
@@ -186,7 +186,7 @@ int parse_extern_shared(parser_t *p, ptx_unit_t *unit) {
         perr(p, t.line, "expected shared variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     if (expect_punct(p, '[', "after shared name") != 0)
@@ -372,7 +372,7 @@ static int parse_local_into(parser_t *p, ptx_shvar_t **listp, size_t *np,
         perr(p, t.line, "expected local variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     // Scalar form (no brackets) declares a single element.
@@ -487,7 +487,7 @@ int parse_common_decl(parser_t *p, ptx_unit_t *unit) {
         perr(p, t.line, "expected .common variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     uint64_t dim = 1;
@@ -593,7 +593,7 @@ int parse_const_decl(parser_t *p, ptx_unit_t *unit) {
         perr(p, t.line, "expected const variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     uint64_t dim = 1;
@@ -836,7 +836,7 @@ int parse_global_decl(parser_t *p, ptx_unit_t *unit) {
         perr(p, t.line, "expected global variable name");
         return -1;
     }
-    char name[256];
+    char name[512];
     if (copy_name(name, sizeof(name), t.text, p, t.line) != 0)
         return -1;
     uint64_t dim = 1;
@@ -1111,7 +1111,7 @@ int parse_extern_func(parser_t *p, ptx_unit_t *unit) {
     if (at_punct(p, '(')) {
         if (!at_punct(p, ')')) {
             for (;;) {
-                char nm[256];
+                char nm[512];
                 ptx_ty_t ty;
                 size_t bytes;
                 int align;
@@ -1137,7 +1137,7 @@ int parse_extern_func(parser_t *p, ptx_unit_t *unit) {
     if (at_punct(p, '(')) {
         if (!at_punct(p, ')')) {
             for (;;) {
-                char nm[256];
+                char nm[512];
                 ptx_ty_t ty;
                 size_t bytes;
                 int align;

@@ -10,7 +10,7 @@
 // Lineage of each u64 register: source param index, -1 plain value,
 // -2 ambiguous (mirrors emitter propagation rules exactly).
 typedef struct {
-    char name[256];
+    char name[512];
     int lin;
 } linent_t;
 
@@ -45,7 +45,7 @@ typedef struct {
 // (-100); ACUDA_MAX_PARAMS is 64, so the ranges cannot collide.
 #define LIN_VALBASE -3
 typedef struct {
-    char name[256];
+    char name[512];
     int kind;
     int param;
     int shvar;

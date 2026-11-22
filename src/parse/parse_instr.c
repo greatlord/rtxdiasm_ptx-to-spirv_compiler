@@ -703,7 +703,7 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                         }
                         size_t lb = strlen(t.text);
                         for (int i = 0; i < v->n; i++) {
-                            char nm[256];
+                            char nm[512];
                             memcpy(nm, t.text, lb);
                             nm[lb] = '_';
                             nm[lb + 1] = "xyzw"[i];
@@ -1174,7 +1174,7 @@ int parse_instr(parser_t *p, ptx_func_t *fn, size_t bi,
                                     : NULL;
             if (vd && vd->n == 2 && vd->elem == PTY_U16 &&
                 strcmp(parts[1], "b32") == 0) {
-                char base[256];
+                char base[512];
                 if (copy_name(base, sizeof(base), t0.text, p, t0.line) != 0)
                     return -1;
                 if (expect_comma(p) != 0 ||

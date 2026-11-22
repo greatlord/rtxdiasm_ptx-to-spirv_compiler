@@ -661,12 +661,12 @@ int sig_add_reg_vec(parser_t *p, ptx_func_t *fn, const char *base,
         return -1;
     }
     size_t lb = strlen(base);
-    if (lb + 2 >= 256) {
+    if (lb + 2 >= 512) {
         perr(p, line, "name too long");
         return -1;
     }
     for (int i = 0; i < n; i++) {
-        char nm[256];
+        char nm[512];
         memcpy(nm, base, lb);
         nm[lb] = '_';
         nm[lb + 1] = "xyzw"[i];
