@@ -2138,7 +2138,7 @@ int build_host_homes(ctx_t *c, const ptx_func_t *fn, char *err,
                                         c->fnparams[cp_i].name);
                                     break;
                                 }
-                            if (cp && cp->kind == 1)
+                            if (cp && (cp->kind == 1 || cp->kind == 6))
                                 nm |= c->bda_word[cp->binding]
                                           ? HM_BDA
                                           : (1ull << (unsigned)cp->binding);
