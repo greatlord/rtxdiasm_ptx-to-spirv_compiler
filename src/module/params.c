@@ -798,8 +798,8 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
             if ((uint32_t)fn->params[i].wide_words >
                 ACUDA_BYVAL_SSBO_WORDS)
                 kinds_out[i] = 4;
-            else if (as_addr[i] && unit->addr_size == 32)
-                kinds_out[i] = 6; // 32-bit mixed blob: word0 ptr, rest scalar
+            else if (as_addr[i] && as_val[i])
+                kinds_out[i] = 6; // mixed blob: word0 ptr, rest scalar
             else
                 kinds_out[i] = as_addr[i] ? 5 : (as_val[i] ? 4 : 3);
             continue;

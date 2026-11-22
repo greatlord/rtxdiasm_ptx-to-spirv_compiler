@@ -423,39 +423,96 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 }
             }
             if (cp->kind == 6) {
-                // Mixed 32-bit blob {ptr32, scalar32}: word0 is a device
-                // pointer resolved through the binding (like a kind-1
-                // pointer); word1 is a scalar push word.
+                // Mixed blob: word0 is a device pointer (binding). Remaining
+                // bytes are scalar push words. 32-bit: 8 bytes {ptr32,scalar32}
+                // with scalar at offset 4 (1 push word). 64-bit: wide_words*8
+                // bytes with ptr at 0 and scalar at offset 8 ((wide_words-1)*2
+                // push words).
                 int64_t koff = in->src[0].addr_imm;
+                int scalar_base = (cp->push_words <= 1) ? 4 : 8;
                 if (koff == 0) {
-                    if (in->ty != PTY_U32) {
-                        failf(c, line,
-                              "kind-6 word0 must load as .u32");
+                    if (in->ty != PTY_U64 && in->ty != PTY_U32) {
+                        failf(c, line, "kind-6 pointer word must load as .u32 or .u64");
                         return;
                     }
                     if (check_dst(c, in->dst, in->ty, line) != 0)
                         return;
+                    if (c->addr_size == 32 && c->use_bda &&
+                        cp->binding >= 0 && c->bda_word[cp->binding]) {
+                        uint32_t lo = nid(c), hi = nid(c);
+                        emit_push_load(c, b, &lo, PTY_U32, (uint32_t)c->bda_word[cp->binding], line);
+                        emit_push_load(c, b, &hi, PTY_U32, (uint32_t)c->bda_word[cp->binding] + 1, line);
+                        if (c->failed) return;
+                        uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c);
+                        put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                        put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                        put(c, b, (5u << 16) | S_Shl); put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64); put(c, b, const_u64(c, 32));
+                        uint32_t base = nid(c);
+                        emit_arith(c, b, S_Or, c->t_u64, base, sh, lo64);
+                        def_ptr(c, in->dst, -3, base);
+                        reg_t *dr6 = find_reg(c, in->dst);
+                        if (dr6) { dr6->is_tex = 0; if (in->ty == PTY_U32) { dr6->cur = lo; dr6->cur_ty = PTY_U32; } }
+                        return;
+                    }
+                    if (c->use_bda && cp->binding >= 0 && c->bda_word[cp->binding] && in->ty == PTY_U32) {
+                        uint32_t word = nid(c);
+                        emit_push_load(c, b, &word, PTY_U32, (uint32_t)c->bda_word[cp->binding], line);
+                        if (c->failed) return;
+                        reg_t *dr6 = find_reg(c, in->dst);
+                        def_ptr(c, in->dst, cp->binding, const_u64(c, 0));
+                        dr6 = find_reg(c, in->dst);
+                        if (dr6) { dr6->is_tex = cp->is_tex; dr6->cur = word; dr6->cur_ty = PTY_U32; }
+                        return;
+                    }
                     def_ptr(c, in->dst, cp->binding, const_u64(c, 0));
                     reg_t *dr6 = find_reg(c, in->dst);
-                    if (dr6)
-                        dr6->is_tex = cp->is_tex;
+                    if (dr6) dr6->is_tex = cp->is_tex;
                     return;
-                } else if (koff == 4) {
-                    if (in->ty != PTY_U32) {
-                        failf(c, line,
-                              "kind-6 word1 must load as .u32");
+                } else if (koff >= scalar_base) {
+                    int pw_off = (int)(koff - scalar_base) / 4;
+                    int pw = cp->push_word + pw_off;
+                    if (pw < cp->push_word || pw >= cp->push_word + cp->push_words) {
+                        failf(c, line, "offset out of range in kind-6 scalar area");
                         return;
                     }
-                    if (check_dst(c, in->dst, in->ty, line) != 0)
+                    if (in->ty == PTY_U64 || in->ty == PTY_F64) {
+                        if ((koff - scalar_base) % 4 != 0 || pw + 1 > cp->push_word + cp->push_words) {
+                            failf(c, line, "misaligned 64-bit load in kind-6 scalar area");
+                            return;
+                        }
+                        if (check_dst(c, in->dst, in->ty, line) != 0) return;
+                        uint32_t lo = nid(c), hi = nid(c);
+                        emit_push_load(c, b, &lo, PTY_U32, pw, line);
+                        emit_push_load(c, b, &hi, PTY_U32, pw + 1, line);
+                        uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c);
+                        put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                        put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                        put(c, b, (5u << 16) | S_Shl); put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64); put(c, b, const_u64(c, 32));
+                        uint32_t id6 = nid(c);
+                        emit_arith(c, b, S_Or, c->t_u64, id6, sh, lo64);
+                        if (in->ty == PTY_F64) {
+                            uint32_t fv = nid(c);
+                            put(c, b, (4u << 16) | S_Bitcast); put(c, b, c->t_f64); put(c, b, fv); put(c, b, id6);
+                            id6 = fv;
+                        }
+                        def_val(c, in->dst, in->ty, id6);
                         return;
-                    uint32_t id6 = nid(c);
-                    emit_push_load(c, b, &id6, PTY_U32, cp->push_word,
-                                   line);
-                    def_val(c, in->dst, in->ty, id6);
+                    }
+                    if (check_dst(c, in->dst, in->ty, line) != 0) return;
+                    uint32_t wv = nid(c);
+                    emit_push_load(c, b, &wv, PTY_U32, pw, line);
+                    if (in->ty == PTY_F32) {
+                        uint32_t fv = nid(c);
+                        put(c, b, (4u << 16) | S_Bitcast); put(c, b, c->t_f32); put(c, b, fv); put(c, b, wv);
+                        wv = fv;
+                    } else if (in->ty == PTY_U16 || in->ty == PTY_U8) {
+                        uint32_t raw = wv; wv = nid(c);
+                        emit_arith(c, b, S_And, c->t_u32, wv, raw, const_u32(c, in->ty == PTY_U8 ? 0xffu : 0xffffu));
+                    }
+                    def_val(c, in->dst, in->ty, wv);
                     return;
                 }
-                failf(c, line,
-                      "offset into a kind-6 blob must be 0 or 4");
+                failf(c, line, "unsupported offset in kind-6 blob");
                 return;
             }
 

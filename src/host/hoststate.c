@@ -2014,8 +2014,15 @@ static cparam_t *param_word(ctx_t *c, const char *name, int64_t off,
     int part = (int)(off / 8);
     if (part < 0 || part >= words)
         return NULL;
+    cparam_t *base = find_cparam(c, name);
+    if (base && base->kind == 6) {
+        // Kind 6 is a single cparam covering the whole mixed blob; rel is
+        // the full byte offset within the blob.
+        *rel = (int)off;
+        return base;
+    }
     if (part == 0)
-        return find_cparam(c, name);
+        return base;
     char pn[300];
     if (snprintf(pn, sizeof(pn), "%s#%d", name, part) >= (int)sizeof(pn))
         return NULL;

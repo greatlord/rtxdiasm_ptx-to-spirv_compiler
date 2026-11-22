@@ -569,12 +569,19 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                 ctx->npush += 2 * words;
             }
         } else if (cp->kind == 6) {
-            // Mixed 32-bit blob: word0's target gets a plain storage-buffer
-            // binding (like a kind-1 pointer); word1 travels as one push
-            // word.
+            // Mixed blob: word0 is a pointer (binding). Remaining bytes
+            // are scalar push words. 32-bit: 8-byte blob {ptr32,scalar32}
+            // => 1 push word. 64-bit: wide_words 8-byte words => word0
+            // pointer binding + (wide_words-1)*2 scalar push words.
+            int words6 = fn->params[i].wide_words;
+            if (words6 < 1) words6 = 1;
+            int scalar_pw = (words6 <= 1) ? 1 : (words6 - 1) * 2;
             cp->binding = ctx->nbindings++;
-            cp->push_word = ctx->npush++;
-            cp->push_words = 1;
+            if (ctx->npush % 2 && scalar_pw > 1)
+                ctx->npush++; // even-align multi-word scalar block
+            cp->push_word = ctx->npush;
+            cp->push_words = scalar_pw;
+            ctx->npush += scalar_pw;
         } else {
             cp->binding = -1;
             cp->push_word = ctx->npush++;
@@ -614,7 +621,7 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                     cp = &ctx->cparams[q];
                     break;
                 }
-            if (cp && cp->kind == 1 && cp->is_tex == 0 &&
+            if (cp && (cp->kind == 1 || cp->kind == 6) && cp->is_tex == 0 &&
                 strncmp(cp->name, "__acuda_host_", 13) != 0)
                 n_plain++;
         }
@@ -660,7 +667,7 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
                             cp = &ctx->cparams[q];
                             break;
                         }
-                    if (!cp || cp->kind != 1 || cp->is_tex != 0 ||
+                    if (!cp || (cp->kind != 1 && cp->kind != 6) || cp->is_tex != 0 ||
                         strncmp(cp->name, "__acuda_host_", 13) == 0)
                         continue;
                     ctx->bda_word[b] = ctx->npush;
