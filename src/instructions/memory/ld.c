@@ -454,14 +454,36 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                         if (dr6) { dr6->is_tex = 0; if (in->ty == PTY_U32) { dr6->cur = lo; dr6->cur_ty = PTY_U32; } }
                         return;
                     }
-                    if (c->use_bda && cp->binding >= 0 && c->bda_word[cp->binding] && in->ty == PTY_U32) {
+                    if (c->use_bda && cp->binding >= 0 && c->bda_word[cp->binding]) {
+                        if (in->ty == PTY_U64) {
+                            if (check_dst(c, in->dst, PTY_U64, line) != 0)
+                                return;
+                            uint32_t lo = nid(c), hi = nid(c);
+                            emit_push_load(c, b, &lo, PTY_U32, (uint32_t)c->bda_word[cp->binding], line);
+                            emit_push_load(c, b, &hi, PTY_U32, (uint32_t)c->bda_word[cp->binding] + 1, line);
+                            if (c->failed) return;
+                            uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c);
+                            put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                            put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                            put(c, b, (5u << 16) | S_Shl); put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64); put(c, b, const_u64(c, 32));
+                            uint32_t addr = nid(c);
+                            emit_arith(c, b, S_Or, c->t_u64, addr, sh, lo64);
+                            def_ptr(c, in->dst, -3, addr);
+                            return;
+                        }
+                        /* BDA sub-word: scalar (matches kind 1 BDA sub-word). */
+                        if (check_dst(c, in->dst, in->ty, line) != 0)
+                            return;
                         uint32_t word = nid(c);
                         emit_push_load(c, b, &word, PTY_U32, (uint32_t)c->bda_word[cp->binding], line);
                         if (c->failed) return;
-                        reg_t *dr6 = find_reg(c, in->dst);
-                        def_ptr(c, in->dst, cp->binding, const_u64(c, 0));
-                        dr6 = find_reg(c, in->dst);
-                        if (dr6) { dr6->is_tex = cp->is_tex; dr6->cur = word; dr6->cur_ty = PTY_U32; }
+                        if (in->ty == PTY_U8 || in->ty == PTY_U16) {
+                            uint32_t raw = word;
+                            word = nid(c);
+                            emit_arith(c, b, S_And, c->t_u32, word, raw,
+                                       const_u32(c, in->ty == PTY_U8 ? 0xffu : 0xffffu));
+                        }
+                        def_val(c, in->dst, in->ty, word);
                         return;
                     }
                     def_ptr(c, in->dst, cp->binding, const_u64(c, 0));

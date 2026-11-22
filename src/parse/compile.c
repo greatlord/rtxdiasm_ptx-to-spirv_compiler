@@ -566,11 +566,16 @@ static acuda_status_t compile_func(const ptx_unit_t *unit,
                 k->info.is_tex[i] == 3)
                 ntex_meta++;
         } else if (k->info.is_ptr[i] == 6) {
-            // Mixed 32-bit blob (word0 device pointer, word1 scalar):
-            // bind word0's target like a plain pointer and pass word1
-            // as one push word.
+            // Mixed: word0 is a pointer binding. Remaining bytes are scalar
+            // push words. 32-bit 8-byte blob => 1 word; 64-bit wide blob
+            // => (wide_words-1)*2 words, even-aligned if > 1.
             nptr++;
-            npush += 1;
+            uint32_t words6 = k->info.wide_words[i];
+            if (words6 < 1) words6 = 1;
+            uint32_t scalar_pw = (words6 <= 1) ? 1u : (words6 - 1u) * 2u;
+            if (npush % 2u && scalar_pw > 1u)
+                npush++;
+            npush += scalar_pw;
         } else if (k->info.is_ptr[i] == 2) {
             if (npush % 2)
                 npush++; // even-align 64-bit scalars (matches emitter)
