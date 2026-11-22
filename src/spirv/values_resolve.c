@@ -654,8 +654,37 @@ int resolve_addr_ex(ctx_t *c, spv_blob_t *b, const ptx_opd_t *op,
             c->last_local = lv;
             return 0;
         }
+        cparam_t *cp = find_cparam(c, op->param);
+        if (cp && (cp->kind == 1 || cp->kind == 6)) {
+            if (c->use_bda && cp->binding >= 0 && c->bda_word[cp->binding]) {
+                uint32_t lo = nid(c), hi = nid(c);
+                emit_push_load(c, b, &lo, PTY_U32, (uint32_t)c->bda_word[cp->binding], line);
+                emit_push_load(c, b, &hi, PTY_U32, (uint32_t)c->bda_word[cp->binding] + 1, line);
+                if (c->failed) return -1;
+                uint32_t lo64 = nid(c), hi64 = nid(c), sh = nid(c), base = nid(c);
+                put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, lo64); put(c, b, lo);
+                put(c, b, (4u << 16) | S_UConvert); put(c, b, c->t_u64); put(c, b, hi64); put(c, b, hi);
+                put(c, b, (5u << 16) | S_Shl); put(c, b, c->t_u64); put(c, b, sh); put(c, b, hi64); put(c, b, const_u64(c, 32));
+                emit_arith(c, b, S_Or, c->t_u64, base, sh, lo64);
+                *binding = -3; *off = base; *shvar = -1; *glvar = -1;
+                if (op->addr_imm != 0) {
+                    uint32_t id = nid(c);
+                    emit_arith(c, b, S_IAdd, c->t_u64, id, *off, const_u64(c, (uint64_t)op->addr_imm));
+                    *off = id;
+                }
+                return 0;
+            }
+            *binding = cp->binding; *off = const_u64(c, (uint64_t)op->addr_imm);
+            *shvar = -1; *glvar = -1;
+            return 0;
+        }
     }
-    failf(c, line, "address must be a register (param base unsupported)");
+    {
+        cparam_t *_cp = find_cparam(c, op->param);
+        char _em[512];
+        snprintf(_em, sizeof(_em), "address must be a register (param base unsupported kind=%d: %s)", _cp ? _cp->kind : -1, op->param);
+        failf(c, line, _em);
+    }
     return -1;
 }
 
