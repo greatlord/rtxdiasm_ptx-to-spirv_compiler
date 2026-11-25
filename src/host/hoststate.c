@@ -571,7 +571,11 @@ static void sm_update_tag(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
         if (in->src[s].kind != OPD_REG)
             continue;
         int sr = sm_reg_index(c, in->src[s].reg);
-        if (sr >= 0 && c->host_dynamic[sr]) {
+        // A source that is also the destination (`selp %r, new, %r, p`)
+        // must not override the home the emitter just established for
+        // the result: the merge keeps the new arm's concrete home and
+        // only the tag is refreshed below.
+        if (sr >= 0 && sr != ri && c->host_dynamic[sr]) {
             uint32_t tag = sm_load_var(c, b, c->t_u32,
                                        c->host_tag_var[sr]);
             sm_store_var(c, b, c->host_tag_var[ri], tag);

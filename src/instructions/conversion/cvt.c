@@ -533,14 +533,24 @@ void emit_cvt_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 // rejects pointer registers as values.
                 reg_t *srw = find_reg(c, in->src[0].reg);
                 if (srw && srw->defined && srw->is_ptr &&
-                    srw->binding >= 0 && srw->shvar < 0 &&
-                    srw->glvar < 0 && srw->paddr < 0) {
+                    (srw->binding >= 0 || srw->binding == -3 ||
+                     (srw->binding == -2 && srw->dyn_home)) &&
+                    srw->shvar < 0 && srw->glvar < 0 && srw->paddr < 0) {
                     if (check_dst(c, in->dst, PTY_U64, line) != 0)
                         return;
                     def_ptr(c, in->dst, srw->binding, srw->off);
                     reg_t *drw = find_reg(c, in->dst);
-                    if (drw)
+                    if (drw) {
                         drw->is_tex = srw->is_tex;
+                        if (srw->binding == -2 && srw->dyn_home) {
+                            // Dynamic pointer word: the widened value
+                            // addresses the same home, so keep the
+                            // runtime tag and let address uses go
+                            // through the tag switch.
+                            drw->dyn_home = 1;
+                            drw->dyn_tag = srw->dyn_tag;
+                        }
+                    }
                     return;
                 }
                 // else fall through (generic conversion below)

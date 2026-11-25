@@ -86,6 +86,35 @@ space-coded homes and stay clean errors, as does scalar-minus-pointer
 failure can never yield an empty module (hardened after finding exactly
 that bug with a real numba kernel).
 
+### 4b.1 Lifted 32-bit pointer words
+
+SASS lifted from 32-bit code reaches us as `.address_size 64` modules
+whose pointer parameters are plain `.param .u32` values, with the
+addressing done in 32-bit arithmetic and only widened at the last
+moment (`add.s32 %r, %off, %ptr` then `cvt.u64.u32 %rd, %r` then
+`ld/st.global [%rd]`). A `.u32` parameter therefore also carries a
+lineage: `ld.param.u32` seeds a *word* half, `mov`/`add`/`sub` (and the
+predicated-instruction desugaring below) propagate it, and a global
+address use promotes the parameter to pointer kind 1. That gives it a
+BDA push word instead of a scalar push, which is the authoritative
+device address (the app-visible 32-bit value is a host mapping token).
+
+The promoted word has to survive the two shapes the SASS lifter emits:
+
+- `selp.b32 %r, %new, %r, %p` after a predicated address computation.
+  A select that merges one pointer home with a plain word keeps the
+  pointer arm's home (and selects the numeric words when the pointer
+  arm carries one), so the following widening still addresses the same
+  buffer.
+- `cvt.u64.u32` of that home. Zero-extension keeps the home instead of
+  resolving it as a scalar: descriptor bindings and raw BDA addresses
+  keep their address, and a dynamic pointer word keeps its runtime tag
+  so address uses still go through the tag switch.
+
+The state-machine tag update ignores a source that is also the
+destination, so `selp %r, new, %r, p` does not replace the concrete
+home the emitter just established for `%r`.
+
 ## 5. State spaces
 
 | Space | Status | Notes |

@@ -39,6 +39,11 @@ typedef struct {
 #define HALF_LO 1
 #define HALF_HI 2
 #define HALF_SH 3
+// A plain 32-bit kernel parameter (lifted 32-bit SASS addressing: the
+// legacy ABI declares pointer parameters as .u32).  Such a word is only
+// an address when it is combined with plain offsets and zero-extended
+// into a global/generic access, so track it as a half until then.
+#define HALF_W32 4
 // Scalar (32-bit) parameter values use LIN_VALBASE - param_index.  They
 // are values, never pointers, but still need to mark the parameter as
 // used when the register is read.  The range is above LIN_SHBASE
@@ -237,6 +242,21 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
                                          in->src[0].addr_imm == 0 ? HALF_LO
                                                                   : HALF_HI,
                                          dst_pi, -1);
+                            // A plain .u32 parameter may be a 32-bit
+                            // device pointer in lifted 32-bit SASS.  It
+                            // stays a value until it feeds a widened
+                            // global address (see HALF_W32).
+                            else if (!fn->params[dst_pi].wide_words &&
+                                     fn->params[dst_pi].ty == PTY_U32 &&
+                                     !in->pred[0]) {
+                                // The load itself is a value use of the
+                                // parameter: without it a pure
+                                // half-arithmetic chain would leave the
+                                // parameter classified as unused.
+                                as_val[dst_pi] = 1;
+                                half_set(half, &nhalf, in->dst, HALF_W32,
+                                         dst_pi, -1);
+                            }
                         }
                     } else {
                         lin_set(lin, &nlin, in->dst, dst_pi);
@@ -313,7 +333,9 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
                 in->src[0].kind == OPD_REG && in->dst[0] &&
                 !in->pred[0]) {
                 int hf = half_find(half, nhalf, in->src[0].reg);
-                if (hf >= 0 && half[hf].kind == HALF_LO &&
+                if (hf >= 0 &&
+                    (half[hf].kind == HALF_LO ||
+                     half[hf].kind == HALF_W32) &&
                     half[hf].param >= 0) {
                     lin_set(lin, &nlin, in->dst, half[hf].param);
                     continue;
@@ -434,8 +456,9 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
             // addressing): mov/add/sub combining exactly one pointer
             // half with plain values stays that half, so a later
             // zero-extension + global access promotes the parameter.
-            // Anything else (two different halves, ambiguous sides,
-            // predicated redefinition) falls through and dies below.
+            // Predicated redefinitions arrive as an unpredicated
+            // `OP __ps_N` plus a select (handled just below), so a
+            // direct predicate here is not expected.
             if ((in->op == POP_MOV || in->op == POP_ADD ||
                  in->op == POP_SUB) &&
                 in->dst[0] && !in->pred[0] && in->ty == PTY_U32 &&
@@ -451,7 +474,8 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
                     int hf = half_find(half, nhalf, in->src[s].reg);
                     if (hf >= 0 &&
                         (half[hf].kind == HALF_LO ||
-                         half[hf].kind == HALF_HI) &&
+                         half[hf].kind == HALF_HI ||
+                         half[hf].kind == HALF_W32) &&
                         half[hf].param >= 0) {
                         if (in->op == POP_SUB && s == 1) {
                             ok = 0; // value minus half is not the half
@@ -489,6 +513,51 @@ int analyze_params(const ptx_unit_t *unit, const ptx_func_t *fn,
                     continue;
                 }
                 // else fall through (generic arms kill lineage below)
+            }
+            // Parser-inserted select for predicated execution:
+            // `selp T d, new, old, p` (arms swapped under @!p, old is
+            // Undef when never defined).  A 32-bit pointer half on one
+            // arm is a possible value of the result, so it carries over
+            // when the other arm is plain; two different homes are
+            // ambiguous and fall through.
+            if (in->op == POP_SELP && in->dst[0] && in->ty == PTY_U32 &&
+                in->nsrc >= 2) {
+                int hkind = 0, hparam = -1, ok = 1;
+                for (int s = 0; s < 2 && ok; s++) {
+                    if (in->src[s].kind == OPD_UNDEF)
+                        continue;
+                    if (in->src[s].kind != OPD_REG) {
+                        ok = 0;
+                        break;
+                    }
+                    int hf = half_find(half, nhalf, in->src[s].reg);
+                    if (hf >= 0 &&
+                        (half[hf].kind == HALF_LO ||
+                         half[hf].kind == HALF_HI ||
+                         half[hf].kind == HALF_W32) &&
+                        half[hf].param >= 0) {
+                        if (hkind == 0) {
+                            hkind = half[hf].kind;
+                            hparam = half[hf].param;
+                        } else if (hkind != half[hf].kind ||
+                                   hparam != half[hf].param) {
+                            ok = 0; // two different homes: not a half
+                            break;
+                        }
+                    } else {
+                        int l = lin_find(lin, nlin, in->src[s].reg);
+                        if (l >= 0 || l <= LIN_SHBASE) {
+                            ok = 0;
+                            break;
+                        }
+                        mark_scalar_use(as_val, l);
+                    }
+                }
+                if (ok && hkind != 0) {
+                    half_set(half, &nhalf, in->dst, hkind, hparam, -1);
+                    lin_set(lin, &nlin, in->dst, -1);
+                    continue;
+                }
             }
             // Propagate through mov.u64 / add.u64 / sub.u64 (incl. cvta
             // which the parser desugared to mov.u64). When both sides
