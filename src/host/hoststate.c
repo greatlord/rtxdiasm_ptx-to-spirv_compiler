@@ -656,8 +656,15 @@ static void sm_update_tag(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                      const_u32(c, 0xfffffff9u));
         return;
     }
-    failf(c, in->line,
-          "dynamic pointer home must stay a global or shared pointer");
+    // No concrete home to convert and no dynamic source: the register is
+    // being reused as a plain word (lifted 32-bit SASS reloads a former
+    // pointer register with an index/offset).  Tag it scalar so save and
+    // restore round-trip the value and address uses take the safe default
+    // instead of a stale home.
+    r->dyn_home = 1;
+    r->dyn_tag = c->host_tag_var[ri];
+    sm_store_var(c, b, c->host_tag_var[ri],
+                 const_u32(c, 0xfffffff9u));
 }
 
 static void sm_emit_dyn_mem(ctx_t *c, spv_blob_t *b,
