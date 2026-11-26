@@ -2097,6 +2097,23 @@ attrs_done:;
                 names[nn++] = in->src[1].param;
             for (int ni = 0; ni < nn; ni++) {
                 const char *sym = names[ni];
+                /* Call operands are stored as OPD_PARAM with the raw
+                 * identifier text, so register names reach this pass
+                 * looking exactly like module symbol references.  A
+                 * register declared in this function can never be a
+                 * module symbol: skip it instead of injecting a
+                 * phantom hidden BDA param (call_reg.ptx, indirect_*.ptx). */
+                {
+                    int is_reg = 0;
+                    for (size_t ri = 0; ri < fn.nregs; ri++)
+                        if (strcmp(fn.regs[ri].name, sym) == 0) { is_reg = 1; break; }
+                    if (!is_reg) {
+                        for (size_t vi = 0; vi < fn.nvecs; vi++)
+                            if (strcmp(fn.vecs[vi].name, sym) == 0) { is_reg = 1; break; }
+                    }
+                    if (is_reg)
+                        continue;
+                }
                 int known_modsym = 0;
                 for (size_t gi = 0; gi < unit->nglobals; gi++)
                     if (strcmp(unit->globals[gi].name, sym) == 0) { known_modsym = 1; break; }

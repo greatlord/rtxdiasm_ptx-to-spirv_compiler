@@ -115,6 +115,21 @@ The state-machine tag update ignores a source that is also the
 destination, so `selp %r, new, %r, p` does not replace the concrete
 home the emitter just established for `%r`.
 
+### 4b.2 Register names in call operands
+
+Call results and arguments are parsed into `in.rets[]`/`in.call_args[]`
+as `OPD_PARAM` entries carrying the raw identifier text, so a register
+written without `%` reaches the module-symbol scan looking exactly like
+a reference to `.global`/`.const` data. A name declared by `.reg` in
+the current function can never be a module symbol, so the scan skips it
+before deciding whether to synthesize a hidden BDA parameter. Without
+that guard, `call (temp2, temp3), do_twice, (temp)` produced a phantom
+hidden pointer param for `temp`, which inflated `num_params`/
+`num_ptr_params` and made the launch argument count disagree with the
+module (`call_reg.ptx`, `indirect_selp.ptx`, `indirect_table.ptx`,
+`indirect_const.ptx`). Hidden-symbol params are only for real
+module-scope symbols that the unit does not define.
+
 ## 5. State spaces
 
 | Space | Status | Notes |
