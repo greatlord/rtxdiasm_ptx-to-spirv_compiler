@@ -169,31 +169,21 @@ void emit_madlo_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                     emit_arith(c, b, S_IAdd, c->t_u64, sum, prod,
                                pr->off);
                 } else {
-                    uint32_t a64 = nid(c), b64 = nid(c), p64 = nid(c),
-                             s64 = nid(c), s32 = nid(c);
-                    put(c, b, (4u << 16) | S_UConvert);
+                    // 32-bit address arithmetic: the product wraps modulo
+                    // 2^32 in PTX, so compute it at 32 bits and
+                    // sign-extend it before adding to the 64-bit base.
+                    // Zero-extending a negative displacement (e.g. -160
+                    // -> 0xFFFFFF60) would add ~4 GiB to the base BDA
+                    // and fault the GPU instead of subtracting.
+                    uint32_t p32 = nid(c), p64 = nid(c), s64 = nid(c);
+                    emit_arith(c, b, S_IMul, c->t_u32, p32, mv1.id,
+                               mv2.id);
+                    put(c, b, (4u << 16) | S_SConvert);
                     put(c, b, c->t_u64);
-                    put(c, b, a64);
-                    put(c, b, mv1.id);
-                    put(c, b, (4u << 16) | S_UConvert);
-                    put(c, b, c->t_u64);
-                    put(c, b, b64);
-                    put(c, b, mv2.id);
-                    emit_arith(c, b, S_IMul, c->t_u64, p64, a64, b64);
-                    emit_arith(c, b, S_IAdd, c->t_u64, s64, p64, pr->off);
-                    put(c, b, (4u << 16) | S_UConvert);
-                    put(c, b, c->t_u32);
-                    put(c, b, s32);
-                    put(c, b, s64);
-                    // Tracked offsets are u64 ids everywhere else (and
-                    // the .b32 register only ever holds 32 bits), so
-                    // hand back the zero-extended 32-bit result.
-                    uint32_t z64 = nid(c);
-                    put(c, b, (4u << 16) | S_UConvert);
-                    put(c, b, c->t_u64);
-                    put(c, b, z64);
-                    put(c, b, s32);
-                    sum = z64;
+                    put(c, b, p64);
+                    put(c, b, p32);
+                    emit_arith(c, b, S_IAdd, c->t_u64, s64, pr->off, p64);
+                    sum = s64;
                 }
                 // A 32-bit register also carries the numeric word: the
                 // lifted addressing idiom reuses the same register as

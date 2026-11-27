@@ -209,7 +209,12 @@ void emit_add_sub_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                     return;
                 idx32 = c2.id;
                 uint32_t wide = nid(c);
-                put(c, b, (4u << 16) | S_UConvert);
+                /* 32-bit PTX pointer arithmetic wraps modulo 2^32, so a
+                 * displacement whose high bit is set is a NEGATIVE offset
+                 * (e.g. 0xFFFFFFFC == -4).  Sign-extend it before adding
+                 * to the 64-bit base (BDA / descriptor offset); zero-
+                 * extension would turn -4 into +4 GiB and fault the GPU. */
+                put(c, b, (4u << 16) | S_SConvert);
                 put(c, b, c->t_u64);
                 put(c, b, wide);
                 put(c, b, c2.id);
