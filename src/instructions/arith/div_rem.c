@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "instructions/arith/arith.h"
 
 void emit_div_rem_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
@@ -92,7 +93,21 @@ void emit_div_rem_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 if (c->failed)
                     return;
             }
-            if (!in->approx_div && !(et == PTY_F64 && c->emu_f64)) {
+            // The fully-unrolled software f32 division is exact but
+            // enormous.  The NVIDIA Vulkan driver miscompiles it into a
+            // non-terminating dispatch for some PhysX CalcHash inputs
+            // (the same launch completes when lowered to OpFDiv).
+            // SPIR-V OpFDiv is IEEE-754 correctly rounded, so use it for
+            // f32 by default; ACUDA_SOFT_F32_DIV=1 restores the exact
+            // integer path for drivers where OpFDiv is not conformant.
+            static int soft_f32 = -1;
+            if (soft_f32 < 0) {
+                const char *e = getenv("ACUDA_SOFT_F32_DIV");
+                soft_f32 = (e && *e && *e != '0') ? 1 : 0;
+            }
+            int exact = !in->approx_div && !(et == PTY_F64 && c->emu_f64) &&
+                        (et != PTY_F32 || soft_f32);
+            if (exact) {
                 if (et == PTY_F64) {
                     id = f64_directed_div_exact(c, b, da, db, in->frnd,
                                                 line);
