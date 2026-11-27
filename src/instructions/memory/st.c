@@ -3,6 +3,17 @@
 static void emit_st_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in);
 
 void emit_st_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
+    /* Warp-synchronous volatile shared store: rendezvous the lanes before
+     * the store (see emit_ld_op). */
+    if (!c->failed && in->mem_sem == 4 && in->space == PSP_SHARED) {
+        uint32_t exec = const_u32(c, 2);
+        uint32_t mem = const_u32(c, 2);
+        uint32_t sem = const_u32(c, 0x108u);
+        put(c, b, (4u << 16) | S_ControlBarrier);
+        put(c, b, exec);
+        put(c, b, mem);
+        put(c, b, sem);
+    }
     if (!c->failed && (in->mem_sem == 3 || in->mem_sem == 4)) {
         /* Release barrier before release/acq_rel store. */
         int scope = in->mem_scope;

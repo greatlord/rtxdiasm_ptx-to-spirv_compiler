@@ -27,6 +27,21 @@ static void emit_ldst_mem_barrier(ctx_t *c, spv_blob_t *b, int mem_sem, int mem_
 static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in);
 
 void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
+    /* Warp-synchronous idioms (the CUDA radix-sort histogram scan) do
+     * ld.volatile.shared / st.volatile.shared with no bar.sync between
+     * steps and rely on lockstep lanes observing each other's stores.
+     * Vulkan does not guarantee that without a control barrier, so place
+     * one before volatile shared accesses.  A control barrier (rather
+     * than OpMemoryBarrier) is what synchronises execution. */
+    if (!c->failed && in->mem_sem == 4 && in->space == PSP_SHARED) {
+        uint32_t exec = const_u32(c, 2);      // Scope Workgroup
+        uint32_t mem = const_u32(c, 2);
+        uint32_t sem = const_u32(c, 0x108u);  // AcquireRelease|WorkgroupMemory
+        put(c, b, (4u << 16) | S_ControlBarrier);
+        put(c, b, exec);
+        put(c, b, mem);
+        put(c, b, sem);
+    }
     emit_ld_op_impl(c, b, in);
     /* Acquire barrier after acquire/acq_rel loads is intentionally omitted:
      * it can create driver-hostile SPIR-V patterns in tight loops; the
@@ -423,6 +438,10 @@ static void emit_ld_op_impl(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 }
             }
             if (cp->kind == 6) {
+                if (getenv("ACUDA_DEBUG_SYMBOLS"))
+                    fprintf(stderr, "ACuda: kind6 ld param=%s koff=%lld binding=%d push_word=%d push_words=%d bda_word=%d use_bda=%d addr_size=%d\n",
+                            in->src[0].param, (long long)in->src[0].addr_imm, cp->binding, cp->push_word, cp->push_words,
+                            (cp->binding >= 0 ? (int)c->bda_word[cp->binding] : -1), c->use_bda, c->addr_size);
                 // Mixed blob: word0 is a device pointer (binding). Remaining
                 // bytes are scalar push words. 32-bit: 8 bytes {ptr32,scalar32}
                 // with scalar at offset 4 (1 push word). 64-bit: wide_words*8
