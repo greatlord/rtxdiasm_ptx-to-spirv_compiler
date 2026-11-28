@@ -839,6 +839,23 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
             // barriers for synchronization/visibility.
             ctx->uses_state_lockstep = 0;
         }
+        // Diagnostic override: ACUDA_STATE_LOCKSTEP=wg|sg|off selects the
+        // dispatch discipline regardless of the heuristics above.
+        {
+            const char *ls = getenv("ACUDA_STATE_LOCKSTEP");
+            if (ls && ls[0]) {
+                if (!strcmp(ls, "off") || !strcmp(ls, "0")) {
+                    ctx->uses_state_lockstep = 0;
+                    ctx->uses_state_lockstep_wg = 0;
+                } else if (!strcmp(ls, "wg")) {
+                    ctx->uses_state_lockstep = 1;
+                    ctx->uses_state_lockstep_wg = 1;
+                } else if (!strcmp(ls, "sg")) {
+                    ctx->uses_state_lockstep = 1;
+                    ctx->uses_state_lockstep_wg = 0;
+                }
+            }
+        }
 
         if (build_host_homes(ctx, fn, err, errlen) != 0) {
             ctx->failed = 1;
