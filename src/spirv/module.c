@@ -1287,6 +1287,18 @@ void emit_prelude(ctx_t *c) {
     put(c, &c->types, c->sp_z);
     put(c, &c->types, 1);
     emit_decorate1(c, c->sp_z, D_SpecId, 2);
+    // Per-arena token table: SpecId 4+4i+{0,1,2,3} = {base, size, dlo, dhi}.
+    // All default to 0, which leaves 32-bit pointer values zero-extended.
+    for (int si = 0; si < 8; si++) {
+        for (int sk = 0; sk < 4; sk++) {
+            put(c, &c->types, (4u << 16) | S_SpecConstant);
+            put(c, &c->types, c->t_u32);
+            put(c, &c->types, c->sp_arena[si][sk]);
+            put(c, &c->types, 0);
+            emit_decorate1(c, c->sp_arena[si][sk], D_SpecId,
+                           4 + si * 4 + sk);
+        }
+    }
     c->v_ntid = nid(c);
     put(c, &c->types, (6u << 16) | S_SpecConstantComposite);
     put(c, &c->types, c->t_v3u32);

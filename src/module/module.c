@@ -1067,6 +1067,9 @@ int ptx_emit_spv(const ptx_unit_t *unit, const ptx_func_t *fn,
     ctx->sp_y = nid(ctx);
     ctx->sp_z = nid(ctx);
     ctx->sp_dyn = nid(ctx);
+    for (int si = 0; si < 8; si++)
+        for (int sk = 0; sk < 4; sk++)
+            ctx->sp_arena[si][sk] = nid(ctx);
     emit_prelude(ctx);
     if (ctx->failed)
         goto done;

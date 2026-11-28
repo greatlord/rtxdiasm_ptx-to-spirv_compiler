@@ -572,14 +572,8 @@ int resolve_addr_ex(ctx_t *c, spv_blob_t *b, const ptx_opd_t *op,
             // device address (BDA-style, binding=-3) so generic/global ld/st
             // can proceed. (Scoping to 32-bit avoids breaking 64-bit cases.)
             uint32_t base = r->cur ? r->cur : const_u64(c, 0);
-            if (r->decl_ty == PTY_U32 && r->cur) {
-                uint32_t wide = nid(c);
-                put(c, b, (4u << 16) | S_UConvert);
-                put(c, b, c->t_u64);
-                put(c, b, wide);
-                put(c, b, r->cur);
-                base = wide;
-            }
+            if (r->decl_ty == PTY_U32 && r->cur)
+                base = token_to_addr(c, b, r->cur);
             *binding = -3;
             *off = base;
             *shvar = -1;
@@ -826,6 +820,56 @@ void def_global(ctx_t *c, const char *dst, int var, uint32_t off) {
     r->dyn_home = 0;
 }
 
+
+// Materialises a 32-bit CUdeviceptr token as a 64-bit device address.
+// The token is the arena's host mapping (see arena.c); the driver supplies
+// a per-arena table as specialization constants 4+4i+{0,1,2,3} =
+// {token_base, size, dlo, dhi}, so
+//   token - base <u size  =>  u64(token) + u64(dhi:dlo)
+// Every entry defaults to size 0, which makes the range check false and
+// leaves the value zero-extended (the historical behaviour).
+uint32_t token_to_addr(ctx_t *c, spv_blob_t *b, uint32_t token) {
+    uint32_t wide = nid(c);
+    put(c, b, (4u << 16) | S_UConvert);
+    put(c, b, c->t_u64);
+    put(c, b, wide);
+    put(c, b, token);
+    for (int si = 0; si < 8; si++) {
+        uint32_t off = nid(c);
+        emit_arith(c, b, S_ISub, c->t_u32, off, token, c->sp_arena[si][0]);
+        uint32_t in = nid(c);
+        put(c, b, (5u << 16) | S_ULessThan);
+        put(c, b, c->t_bool);
+        put(c, b, in);
+        put(c, b, off);
+        put(c, b, c->sp_arena[si][1]);
+        uint32_t dlo = nid(c);
+        put(c, b, (4u << 16) | S_UConvert);
+        put(c, b, c->t_u64);
+        put(c, b, dlo);
+        put(c, b, c->sp_arena[si][2]);
+        uint32_t dhi = nid(c);
+        put(c, b, (4u << 16) | S_UConvert);
+        put(c, b, c->t_u64);
+        put(c, b, dhi);
+        put(c, b, c->sp_arena[si][3]);
+        uint32_t dsh = nid(c);
+        emit_arith(c, b, S_Shl, c->t_u64, dsh, dhi, const_u64(c, 32));
+        uint32_t d64 = nid(c);
+        emit_arith(c, b, S_Or, c->t_u64, d64, dsh, dlo);
+        uint32_t cand = nid(c);
+        emit_arith(c, b, S_IAdd, c->t_u64, cand, wide, d64);
+        uint32_t sel = nid(c);
+        put(c, b, (6u << 16) | S_Select);
+        put(c, b, c->t_u64);
+        put(c, b, sel);
+        put(c, b, in);
+        put(c, b, cand);
+        put(c, b, wide);
+        wide = sel;
+    }
+    return wide;
+}
 
 // PhysicalStorageBuffer address (u64) -> typed physical pointer.
 uint32_t bda_convert(ctx_t *c, spv_blob_t *b, uint32_t pty,

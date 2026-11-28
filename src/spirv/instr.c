@@ -313,14 +313,8 @@ void emit_instr(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
                 // Treat the value as a raw global device address (BDA/raw
                 // pointer form, binding=-3) so it can be used for ld/st.
                 uint32_t off = r->cur ? r->cur : const_u64(c, 0);
-                if (in->ty == PTY_U32 && r->cur) {
-                    uint32_t wide = nid(c);
-                    put(c, b, (4u << 16) | S_UConvert);
-                    put(c, b, c->t_u64);
-                    put(c, b, wide);
-                    put(c, b, r->cur);
-                    off = wide;
-                }
+                if (in->ty == PTY_U32 && r->cur)
+                    off = token_to_addr(c, b, r->cur);
                 def_ptr(c, in->dst, -3, off);
                 return;
             }

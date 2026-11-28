@@ -67,6 +67,7 @@ enum {
     S_FSub = 131, S_FMul = 133, S_ShrL = 194,
     S_UGreaterEqual = 174, S_ULess = 176, S_ULessEqual = 178,
     S_UGreater = 172, S_IEqual = 170, S_INotEqual = 171,
+    S_ULessThan = 176, S_ULessThanEqual = 178,
     S_FOrdEqual = 180, S_FOrdNotEqual = 182, S_FOrdLess = 184,
     S_FOrdLessEqual = 188, S_FOrdGreater = 186, S_FOrdGreaterEqual = 190,
     S_FUnordNotEqual = 183, // grammar-verified
@@ -211,6 +212,13 @@ typedef struct {
     uint32_t t_u64x2; // lazily declared { u64, u64 } for OpUMulExtended
     uint32_t sp_x, sp_y, sp_z; // workgroup-size spec constants (0, 1, 2)
     uint32_t sp_dyn; // dynamic-.shared word count spec constant (3)
+    // Per-arena CUdeviceptr translation table, specialization constants
+    // 4.. : a {token_base, size, delta_lo, delta_hi} quad per arena slot.
+    // A zero size marks the slot as unused, so the emitted chain degrades
+    // to the identity when the driver supplies nothing.  The delta is
+    // 64-bit: arena device addresses are not required to be reachable
+    // within 32 bits of their host mapping.
+    uint32_t sp_arena[8][4];
     int has_extern;  // any .extern .shared variable present
     uint32_t t_ptr_in_v3, t_wordarr, t_ssbo, t_ptr_ssbo, t_ptr_u_ssbo;
     uint32_t t_pusharr, t_push, t_ptr_push, t_ptr_u_push, t_funty;
@@ -519,6 +527,8 @@ uint32_t sh_addr_ptr_imm(ctx_t *c, spv_blob_t *b, int var, uint32_t off,
                          int64_t imm);
 uint32_t sh_addr_ptr64(ctx_t *c, spv_blob_t *b, int var, uint32_t off);
 uint32_t bda_convert(ctx_t *c, spv_blob_t *b, uint32_t pty, uint32_t off);
+// 32-bit CUdeviceptr token -> 64-bit device address (arena token table).
+uint32_t token_to_addr(ctx_t *c, spv_blob_t *b, uint32_t token);
 uint32_t pack_lane_get(ctx_t *c, spv_blob_t *b, uint32_t v, int lane,
                        int width, int sign);
 uint32_t swbar_ptr(ctx_t *c, spv_blob_t *b, uint32_t idx);
