@@ -1639,6 +1639,17 @@ static int sm_compute_state_regs(ctx_t *c, const ptx_func_t *fn,
             if (sm_bitget(ib, i))
                 needs[i] = 1;
     }
+    if (getenv("ACUDA_DEBUG_STATE_REGS")) {
+        // Which registers get a Function-variable slot (i.e. survive the
+        // dispatch).  A loop-carried register missing here is re-initialised
+        // every iteration, which silently corrupts loops such as the fluid
+        // emitter binary search.
+        fprintf(stderr, "acuda-state-regs %s:", fn->name ? fn->name : "?");
+        for (int i = 0; i < nr; i++)
+            if (needs[i])
+                fprintf(stderr, " %s", c->regs[i].name);
+        fprintf(stderr, "\n");
+    }
     free(use);
     free(def);
     free(lin);
