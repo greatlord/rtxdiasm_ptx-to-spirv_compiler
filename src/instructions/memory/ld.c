@@ -34,8 +34,18 @@ void emit_ld_op(ctx_t *c, spv_blob_t *b, const ptx_instr_t *in) {
      * one before volatile shared accesses.  A control barrier (rather
      * than OpMemoryBarrier) is what synchronises execution. */
     if (!c->failed && in->mem_sem == 4 && in->space == PSP_SHARED) {
-        uint32_t exec = const_u32(c, 2);      // Scope Workgroup
-        uint32_t mem = const_u32(c, 2);
+        /* The idiom is warp-synchronous: every warp owns a disjoint slice
+         * of the tile and only its own lanes observe each other's stores.
+         * Scope the rendezvous to the subgroup, not the workgroup.  A
+         * workgroup-scoped barrier inside a lockstep state machine (which
+         * dispatches at subgroup-minimum PC) makes every warp wait for all
+         * 256 threads at every step of the scan and corrupts the result.
+         * ACUDA_VOLATILE_WG_SYNC=1 restores the workgroup scope for
+         * comparison. */
+        const char *wg = getenv("ACUDA_VOLATILE_WG_SYNC");
+        int scope = (wg && *wg && *wg != '0') ? 2 : 3;  // Workgroup/Subgroup
+        uint32_t exec = const_u32(c, (uint32_t)scope);
+        uint32_t mem = const_u32(c, (uint32_t)scope);
         uint32_t sem = const_u32(c, 0x108u);  // AcquireRelease|WorkgroupMemory
         put(c, b, (4u << 16) | S_ControlBarrier);
         put(c, b, exec);
